@@ -17,10 +17,7 @@ fn main() -> Result<(), io::Error> {
     // --- 1. SETUP TERMINAL ---
     enable_raw_mode()?; 
     let device = pcap::Device::lookup().unwrap().expect("No device found");
-    // FIX: Added parentheses to call stdout()
     let mut stdout = io::stdout(); 
-    
-    // FIX: Now execute! can use the actual handle
     execute!(stdout, EnterAlternateScreen)?; 
     
     let backend = CrosstermBackend::new(stdout);
@@ -41,7 +38,6 @@ fn main() -> Result<(), io::Error> {
             if tx.send(line).is_err() {break;}
         }
     }
-
    });
 
     // --- 2. MAIN APP LOOP ---
@@ -55,19 +51,6 @@ fn main() -> Result<(), io::Error> {
     }
         terminal.draw(|f| {
         ui::draw(f, &captured_packets);
-        //     let chunks = Layout::default()
-        //         .direction(Direction::Vertical)
-        //         .constraints([
-        //             Constraint::Percentage(80),
-        //             Constraint::Percentage(20),
-        //         ])
-        //         .split(f.area()); // f.area() replaces f.size() in newer Ratatui
-        //
-        // let top_block = Block::default().title(" LIVE PACKET FEED ").borders(Borders::ALL).border_style(Style::default().fg(Color::Green));
-        //     f.render_widget(Paragraph::new(captured_packets.clone()).block(top_block), chunks[0]);
-        //
-        //     let bottom_block = Block::default().title(" STATUS ").borders(Borders::ALL).border_style(Style::default().fg(Color::Green));
-            // f.render_widget(Paragraph::new("Press 'q' to quit").block(bottom_block), chunks[1]);
         })?;
         
 
