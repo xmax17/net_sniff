@@ -1,12 +1,12 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
-    text::Line,
+    text::{Line,Span},
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
 
-pub fn draw(f: &mut Frame, captured_packets: &[Line]) {
+pub fn draw(f: &mut Frame, captured_packets: &[Line],paused:&bool) {
     // 1. Define the layout (Top 80%, Bottom 20%)
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -33,9 +33,16 @@ pub fn draw(f: &mut Frame, captured_packets: &[Line]) {
         .title(" STATUS ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Green));
-
-    let status_widget = Paragraph::new("Press 'q' to quit")
-        .block(bottom_block);
-
+    let status_text = vec![
+    Line::from("Press 'q' to quit"),
+    Line::from("Press Space to pause"),
+    Line::from(Span::styled(
+        format!("Paused: {}", paused),
+        Style::default().fg(if *paused { Color::Yellow } else { Color::Gray })
+    )),
+];
+    let status_widget = Paragraph::new(status_text)
+    .block(bottom_block);
     f.render_widget(status_widget, chunks[1]);
+    
 }

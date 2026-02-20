@@ -1,8 +1,8 @@
 use ratatui::{
-    Terminal, backend::CrosstermBackend, layout::{Constraint, Direction, Layout}, style::{Color,Style}, widgets::{Block, Borders, Paragraph}
+    Terminal, backend::CrosstermBackend
 };
 use crossterm::{
-    event::{self, Event, KeyCode}, execute, style::style, terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode}
+    event::{self, Event, KeyCode}, execute, terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode}
 };
 use std::io;
 use pcap::Capture;
@@ -39,9 +39,12 @@ fn main() -> Result<(), io::Error> {
         }
     }
    });
-
+let mut paused = false;
     // --- 2. MAIN APP LOOP ---
     loop {
+        if !paused {
+            
+        
         while let Ok(packet_desc) = rx.try_recv() {
         captured_packets.push(packet_desc);
         // Keep the list from growing forever and eating RAM
@@ -49,8 +52,9 @@ fn main() -> Result<(), io::Error> {
             captured_packets.remove(0);
         }
     }
+    }
         terminal.draw(|f| {
-        ui::draw(f, &captured_packets);
+        ui::draw(f, &captured_packets,&paused);
         })?;
         
 
@@ -58,9 +62,11 @@ fn main() -> Result<(), io::Error> {
 
         if event::poll(std::time::Duration::from_millis(16))? {
             if let Event::Key(key) = event::read()? {
-                if key.code == KeyCode::Char('q') {
-                    break;
-                }
+            match key.code {
+                KeyCode::Char('q') => {break;},
+                KeyCode::Char(' ') => paused = !paused,
+                _ => {}
+            }
             }
         }
     }
