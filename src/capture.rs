@@ -1,15 +1,11 @@
 use etherparse::SlicedPacket;
-use ratatui::text::Line;
 
-/// This struct holds all the data for a single packet.
-/// It is sent from the capture thread to the main UI loop.
 pub struct PacketData {
-    pub summary: String,       // The short one-liner for the list feed
-    pub full_details: String,  // Protocol metadata for the inspector
-    pub hex_dump: String,      // The raw bytes formatted as hex
+    pub summary: String,       
+    pub full_details: String,  
+    pub hex_dump: String,      
 }
 
-/// Converts raw bytes into a classic hex dump format (16 bytes per line)
 pub fn to_hex_string(bytes: &[u8]) -> String {
     bytes.chunks(16)
         .map(|chunk| {
@@ -22,31 +18,84 @@ pub fn to_hex_string(bytes: &[u8]) -> String {
         .join("\n")
 }
 
-/// Formats high-level information about the packet.
-/// You can expand this logic as you need more specific protocol data.
-pub fn format_protocol_info(bytes: &[u8]) -> String {
-    format!(
-        "--- PACKET METADATA ---\n\
-         Size: {} bytes\n\n\
-         --- PARSER STATUS ---\n\
-         Parsing via etherparse...\n\
-         (Use arrow keys to see full Hex Dump below)",
-        bytes.len()
-    )
+pub fn format_protocol_info(data: &[u8]) -> String {
+    let mut details = format!("--- PACKET METADATA ---\nSize: {} bytes\n", data.len());
+    
+    if let Ok(value) = SlicedPacket::from_ethernet(data) {
+        // 1. Link Layer (MAC Addresses)
+        if let Some(link) = &value.link {
+            details.push_str("\n--- LINK LAYER ---\n");
+            match link {
+                etherparse::LinkSlice::Ethernet2(eth) => {
+                    details.push_str(&format!(
+                        "Src MAC: {:02X?}\nDst MAC: {:02X?}\n", 
+                        eth.source(), 
+                        eth.destination()
+                    ));
+                }
+                _ => details.push_str("Link Type: Non-Ethernet\n"),
+            }
+        }
+
+        // 2. Network Layer (IP Info)
+        if let Some(net) = &value.net {
+            details.push_str("\n--- NETWORK LAYER ---\n");
+            match net {
+                etherparse::NetSlice::Ipv4(ipv4) => {
+                    details.push_str(&format!(
+                        "Protocol: IPv4\nTTL: {}\nID: {}\n", 
+                        ipv4.header().ttl(),
+                        ipv4.header().identification()
+                    ));
+                }
+                etherparse::NetSlice::Ipv6(ipv6) => {
+                    details.push_str(&format!(
+                        "Protocol: IPv6\nHop Limit: {}\n", 
+                        ipv6.header().hop_limit()
+                    ));
+                }
+                _ => details.push_str("Protocol: Other\n"),
+            }
+        }
+
+        // 3. Transport Layer (TCP/UDP Details)
+        if let Some(transport) = &value.transport {
+            details.push_str("\n--- TRANSPORT LAYER ---\n");
+            match transport {
+                etherparse::TransportSlice::Tcp(tcp) => {
+                    details.push_str(&format!(
+                        "Type: TCP\nSrc Port: {}\nDst Port: {}\nWindow: {}\nSeq: {}\n",
+                        tcp.source_port(), 
+                        tcp.destination_port(), 
+                        tcp.window_size(),
+                        tcp.sequence_number()
+                    ));
+                }
+                etherparse::TransportSlice::Udp(udp) => {
+                    details.push_str(&format!(
+                        "Type: UDP\nSrc Port: {}\nDst Port: {}\nLength: {}\n",
+                        udp.source_port(), 
+                        udp.destination_port(),
+                        udp.length()
+                    ));
+                }
+                _ => details.push_str("Type: Other (ICMP/Raw)\n"),
+            }
+        }
+    }
+
+    details
 }
 
-/// The main parsing function that converts raw packet bytes 
-/// into our UI-friendly PacketData struct.
 pub fn parse_packet_full(data: &[u8]) -> Option<PacketData> {
-    // Attempt to slice the packet into its protocol layers
     let value = SlicedPacket::from_ethernet(data).ok()?;
 
     let mut source = String::from("Unknown");
     let mut dest = String::from("Unknown");
-    let mut transport = String::from("DATA");
+    let mut transport_str = String::from("DATA");
 
-    // 1. Parse Network Layer (IPv4 / IPv6)
-    if let Some(net) = value.net {
+    // 1. Parse Network Layer (IPs)
+    if let Some(net) = &value.net {
         match net {
             etherparse::NetSlice::Ipv4(ipv4) => {
                 source = format!("{}", ipv4.header().source_addr());
@@ -60,26 +109,49 @@ pub fn parse_packet_full(data: &[u8]) -> Option<PacketData> {
         }
     }
 
-    // 2. Parse Transport Layer (TCP / UDP)
-    if let Some(transport_layer) = value.transport {
-        match transport_layer {
-            etherparse::TransportSlice::Tcp(tcp) => {
-                transport = format!("TCP:{}", tcp.destination_port());
-            }
-            etherparse::TransportSlice::Udp(udp) => {
-                transport = format!("UDP:{}", udp.destination_port());
-            }
-            _ => {}
-        }
+    // 2. Parse Transport Layer and Protocol
+    if let Some(transport_layer) = &value.transport {
+        transport_str = guess_protocol(transport_layer);
     }
 
-    // 3. Construct the summary string
-    // Format: "192.168.1.1 -> 1.1.1.1 | TCP:443"
-    let summary = format!("{:<15} -> {:<15} | {}", source, dest, transport);
+    let summary = format!("{:<15} -> {:<15} | {}", source, dest, transport_str);
 
     Some(PacketData {
         summary,
         full_details: format_protocol_info(data),
         hex_dump: to_hex_string(data),
     })
+}
+
+fn guess_protocol(transport_slice: &etherparse::TransportSlice) -> String {
+    use etherparse::TransportSlice::*;
+    
+    match transport_slice {
+        Tcp(tcp) => {
+            let port = tcp.destination_port();
+            let payload = tcp.payload(); // Access payload directly from the TCP slice
+            
+            if port == 80 || payload.starts_with(b"GET") || payload.starts_with(b"POST") {
+                "HTTP".to_string()
+            } else if port == 443 || (!payload.is_empty() && payload[0] == 0x16) {
+                "HTTPS/TLS".to_string()
+            } else {
+                format!("TCP:{}", port)
+            }
+        },
+        Udp(udp) => {
+            let port = udp.destination_port();
+            let payload = udp.payload(); // Access payload directly from the UDP slice
+            
+            if port == 53 || payload.len() >= 2 && (payload[2] & 0x80 == 0) && port == 53 {
+                "DNS".to_string()
+            } else if port == 443 {
+                "QUIC/UDP".to_string()
+            } else {
+                format!("UDP:{}", port)
+            }
+        },
+        Icmpv4(_) => "ICMPv4".to_string(),
+        Icmpv6(_) => "ICMPv6".to_string(),
+    }
 }
