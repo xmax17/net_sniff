@@ -1,6 +1,6 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout},
-    style::{Color, Style, Stylize},
+    style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
@@ -10,102 +10,111 @@ use crate::InputMode;
 
 pub fn draw(
     f: &mut Frame,
-    captured_packets: &[&PacketData], // Receives the filtered slice
+    captured_packets: &[&PacketData],
     paused: &bool,
     filter: &str,
     mode: &InputMode,
     list_state: &mut ListState,
 ) {
-    // 1. Create the vertical split: Top (Main App) vs Bottom (Status)
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(3),    // Feed and Inspector
-            Constraint::Length(4), // Status Bar
-        ])
+        .constraints([Constraint::Min(3), Constraint::Length(3)])
         .split(f.area());
 
-    // 2. Create the horizontal split in the top area: Left (Feed) vs Right (Inspector)
     let top_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(70), // Packet Feed
-            Constraint::Percentage(30), // Inspector Pane
-        ])
+        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
         .split(main_chunks[0]);
 
-    // --- PACKET FEED (LEFT) ---
-    let items: Vec<ListItem> = captured_packets
-        .iter()
-        .map(|p| {
-            // We can add some color back to the summary here
-            ListItem::new(Line::from(vec![
-                Span::styled(&p.summary, Style::default().fg(Color::White)),
-            ]))
-        })
-        .collect();
+    // --- PACKET FEED ---
+    let items: Vec<ListItem> = captured_packets.iter().map(|p| {
+        let parts: Vec<&str> = p.summary.split('|').collect();
+        let addresses = parts.get(0).unwrap_or(&"").to_string();
+        let protocol = parts.get(1).unwrap_or(&" DATA ").to_string();
+        let app_color = if p.app_name == "Unknown" { Color::DarkGray } else { Color::Rgb(0, 255, 127) };
 
-    let feed_block = Block::default()
-        .title(" LIVE PACKET FEED ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Green));
+        ListItem::new(Line::from(vec![
+            Span::styled(addresses, Style::default().fg(Color::White)),
+            Span::styled(" │ ", Style::default().fg(Color::Rgb(60, 60, 60))),
+            Span::styled(protocol, Style::default().fg(Color::Magenta).bold()),
+            Span::styled(" │ ", Style::default().fg(Color::Rgb(60, 60, 60))),
+            Span::styled(format!("({})", p.app_name), Style::default().fg(app_color).italic()),
+        ]))
+    }).collect();
 
-    let list_widget = List::new(items)
-        .block(feed_block)
-        .highlight_style(Style::default().bg(Color::Rgb(50, 50, 50)).bold())
-        .highlight_symbol(">> ");
+    f.render_stateful_widget(
+        List::new(items)
+            .block(Block::default().title(" 📡 LIVE FEED ").borders(Borders::ALL).green())
+            .highlight_style(Style::default().bg(Color::Rgb(30, 30, 30)).bold())
+            .highlight_symbol("⚡ "),
+        top_chunks[0],
+        list_state,
+    );
 
-    f.render_stateful_widget(list_widget, top_chunks[0], list_state);
+    // --- ENHANCED INSPECTOR ---
+    let insp_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(10), Constraint::Length(12)])
+        .split(top_chunks[1]);
 
-    // --- INSPECTOR PANE (RIGHT) ---
-    // Logic: Get data from the selected packet
-    let inspector_content = if let Some(idx) = list_state.selected() {
+    if let Some(idx) = list_state.selected() {
         if let Some(packet) = captured_packets.get(idx) {
-            format!(
-                "{}\n\n-- HEX DUMP --\n{}",
-                packet.full_details, packet.hex_dump
-            )
-        } else {
-            "No data found".to_string()
+            let mut details_lines = Vec::new();
+            
+            // Header: App Info
+            details_lines.push(Line::from(vec![
+                Span::styled(" ● ", Style::default().fg(Color::Rgb(0, 255, 127))),
+                Span::styled("APPLICATION CONTEXT", Style::default().bold().underlined())
+            ]));
+            details_lines.push(Line::from(format!("   Process: {}", packet.app_name).white()));
+            details_lines.push(Line::from(""));
+
+            // Parse layer strings into styled blocks
+// Layer 2: Protocol Specifics
+            // Explicitly tell Rust 'line' is a &str
+            for line in packet.full_details.lines() {
+                let line: &str = line; // Type hint
+                if line.contains("---") {
+                    let section_name = line.replace("-", "").trim().to_string();
+                    details_lines.push(Line::from(vec![
+                        Span::styled(" ● ", Style::default().fg(Color::Yellow)),
+                        Span::styled(section_name, Style::default().bold().yellow().underlined())
+                    ]));
+                } else if !line.is_empty() {
+                    details_lines.push(Line::from(format!("   {}", line).white()));
+                }
+            }
+
+            f.render_widget(
+                Paragraph::new(details_lines)
+                    .block(Block::default().title(" 🔍 DETAILS ").borders(Borders::ALL).yellow())
+                    .wrap(Wrap { trim: false }),
+                insp_chunks[0]
+            );
+
+            f.render_widget(
+                Paragraph::new(packet.hex_dump.as_str())
+                    .block(Block::default().title(" 🔢 RAW PAYLOAD ").borders(Borders::ALL).blue())
+                    .style(Style::default().fg(Color::Rgb(140, 140, 140))),
+                insp_chunks[1]
+            );
         }
-    } else {
-        "Select a packet to inspect...".to_string()
-    };
+    }
 
-    let inspector_block = Block::default()
-        .title(" INSPECTOR ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+    // --- STATUS BAR ---
+    let is_at_bottom = list_state.selected().map_or(true, |i| i >= captured_packets.len().saturating_sub(1));
+    let status_line = Line::from(vec![
+        Span::styled(match mode { InputMode::Normal => " NORMAL ", InputMode::Search => " SEARCH " }, Style::default().bg(Color::Green).fg(Color::Black).bold()),
+        " ".into(),
+        if *paused { " PAUSED ".on_red().white().bold() } else { " LIVE ".on_green().white().bold() },
+        " │ Filter: ".dark_gray().into(),
+        filter.yellow().underlined(),
+        " │ ".dark_gray().into(),
+        if is_at_bottom && !*paused { " AUTO-SCROLL ".on_blue().white().bold() } else { " STATIC ".dark_gray() },
+    ]);
 
-    let inspector_widget = Paragraph::new(inspector_content)
-        .block(inspector_block)
-        .wrap(Wrap { trim: true });
-
-    f.render_widget(inspector_widget, top_chunks[1]);
-
-    // --- STATUS BAR (BOTTOM) ---
-    let (mode_text, mode_color) = match mode {
-        InputMode::Normal => (" NORMAL MODE ", Color::Green),
-        InputMode::Search => (" SEARCH MODE ", Color::Cyan),
-    };
-
-    let status_text = vec![
-        Line::from(vec![
-            Span::styled(mode_text, Style::default().fg(mode_color).bold()),
-            Span::raw(format!(" | Filter: [{}]", filter)),
-            Span::styled(
-                if *paused { " (PAUSED)" } else { "" },
-                Style::default().fg(Color::Yellow),
-            ),
-        ]),
-        Line::from("j/k: Scroll | /: Search | c: Clear | q: Quit"),
-    ];
-
-    let status_block = Block::default()
-        .title(" STATUS ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(mode_color));
-
-    let status_widget = Paragraph::new(status_text).block(status_block);
-    f.render_widget(status_widget, main_chunks[1]);
+    f.render_widget(
+        Paragraph::new(status_line).block(Block::default().borders(Borders::ALL).title_bottom(Line::from(" [j/k] Scroll [g/G] Top/End [/] Search [Space] Pause [q] Quit ").centered().dark_gray())),
+        main_chunks[1]
+    );
 }
