@@ -1,120 +1,193 @@
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style, Stylize},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Style, Stylize, Modifier},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{BarChart, Block, Borders, List, ListItem, ListState, Paragraph, Tabs, Wrap},
     Frame,
+    symbols::bar,
 };
+use std::collections::HashMap;
 use crate::capture::PacketData;
-use crate::InputMode;
+use crate::{InputMode, Tab};
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.2} KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.2} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
+}
 
 pub fn draw(
     f: &mut Frame,
-    captured_packets: &[&PacketData],
+    active_tab: Tab,
+    local_packets: &[PacketData],
+    connections: &HashMap<(String, String, String, String), u64>,
+    throughput_history: &[u64],
     paused: &bool,
+    is_saving: &bool,
     filter: &str,
     mode: &InputMode,
-    list_state: &mut ListState,
+    feed_list_state: &mut ListState,
+    connections_list_state: &mut ListState,
 ) {
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(3)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(5),
+            Constraint::Length(3),
+        ])
         .split(f.area());
 
-    let top_chunks = Layout::default()
+    // --- TABS (Styled with Borders) ---
+    let titles = vec![" 📡 [1] FEED ", " 🌐 [2] CONNECTIONS "];
+    let tabs = Tabs::new(titles)
+        .block(Block::default().borders(Borders::ALL).title(" NET-SNIFF-RS "))
+        .select(active_tab as usize)
+        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        .divider(Span::raw("|").dark_gray());
+    f.render_widget(tabs, main_chunks[0]);
+
+    match active_tab {
+        Tab::Feed => draw_feed_tab(f, main_chunks[1], local_packets, filter, feed_list_state),
+        Tab::Connections => draw_connections_tab(f, main_chunks[1], connections, throughput_history, filter, connections_list_state),
+    }
+
+    // --- STATUS BAR (Enhanced High-Visibility) ---
+    let mut status_line = vec![
+        Span::styled(
+            match mode { InputMode::Normal => " NORMAL ", InputMode::Search => " SEARCH " },
+            Style::default().bg(if *mode == InputMode::Normal { Color::Blue } else { Color::Magenta }).fg(Color::Black).bold()
+        ),
+        " ".into(),
+        if *paused { " PAUSED ".on_red().white().bold() } else { " LIVE ".on_green().white().bold() },
+        " ".into(),
+    ];
+
+    if *is_saving {
+        status_line.push(Span::styled(" ● RECORDING ", Style::default().bg(Color::Red).fg(Color::White).bold()));
+    }
+
+    status_line.push(" │ ".dark_gray().into());
+    status_line.push("Filter: ".gray());
+    status_line.push(if filter.is_empty() { "none".dark_gray() } else { filter.yellow().underlined() });
+
+    let footer = Paragraph::new(Line::from(status_line))
+        .block(Block::default().borders(Borders::ALL)
+            .title_bottom(Line::from(" [w] Rec [Space] Pause [/] Search [1/2] Tabs [q] Quit ").centered().dark_gray()));
+    f.render_widget(footer, main_chunks[2]);
+}
+
+fn draw_feed_tab(f: &mut Frame, area: Rect, packets: &[PacketData], filter: &str, list_state: &mut ListState) {
+    let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-        .split(main_chunks[0]);
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
 
-    // --- PACKET FEED ---
-    let items: Vec<ListItem> = captured_packets.iter().map(|p| {
-        let parts: Vec<&str> = p.summary.split('|').collect();
-        let addresses = parts.get(0).unwrap_or(&"").to_string();
-        let protocol = parts.get(1).unwrap_or(&" DATA ").to_string();
-        let app_color = if p.app_name == "Unknown" { Color::DarkGray } else { Color::Rgb(0, 255, 127) };
-
+    let filtered: Vec<&PacketData> = packets.iter()
+        .filter(|p| filter.is_empty() || p.summary.to_lowercase().contains(&filter.to_lowercase()) || p.app_name.to_lowercase().contains(&filter.to_lowercase()))
+        .collect();
+    
+    let items: Vec<ListItem> = filtered.iter().map(|p| {
+        let color = if p.app_name == "Unknown" { Color::DarkGray } else { Color::Green };
         ListItem::new(Line::from(vec![
-            Span::styled(addresses, Style::default().fg(Color::White)),
-            Span::styled(" │ ", Style::default().fg(Color::Rgb(60, 60, 60))),
-            Span::styled(protocol, Style::default().fg(Color::Magenta).bold()),
-            Span::styled(" │ ", Style::default().fg(Color::Rgb(60, 60, 60))),
-            Span::styled(format!("({})", p.app_name), Style::default().fg(app_color).italic()),
+            Span::styled(format!("{:<12}", p.app_name), Style::default().fg(color)),
+            Span::raw(format!(" │ {}", p.summary)).white(),
         ]))
     }).collect();
 
     f.render_stateful_widget(
         List::new(items)
-            .block(Block::default().title(" 📡 LIVE FEED ").borders(Borders::ALL).green())
-            .highlight_style(Style::default().bg(Color::Rgb(30, 30, 30)).bold())
-            .highlight_symbol("⚡ "),
-        top_chunks[0],
+            .block(Block::default().title(" STREAM ").borders(Borders::ALL).border_style(Style::default().fg(Color::Green)))
+            .highlight_style(Style::default().bg(Color::Rgb(30, 30, 30)).add_modifier(Modifier::BOLD))
+            .highlight_symbol(">> "),
+        chunks[0],
         list_state,
     );
 
-    // --- ENHANCED INSPECTOR ---
-    let insp_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(10), Constraint::Length(12)])
-        .split(top_chunks[1]);
-
     if let Some(idx) = list_state.selected() {
-        if let Some(packet) = captured_packets.get(idx) {
-            let mut details_lines = Vec::new();
-            
-            // Header: App Info
-            details_lines.push(Line::from(vec![
-                Span::styled(" ● ", Style::default().fg(Color::Rgb(0, 255, 127))),
-                Span::styled("APPLICATION CONTEXT", Style::default().bold().underlined())
-            ]));
-            details_lines.push(Line::from(format!("   Process: {}", packet.app_name).white()));
-            details_lines.push(Line::from(""));
-
-            // Parse layer strings into styled blocks
-// Layer 2: Protocol Specifics
-            // Explicitly tell Rust 'line' is a &str
-            for line in packet.full_details.lines() {
-                let line: &str = line; // Type hint
-                if line.contains("---") {
-                    let section_name = line.replace("-", "").trim().to_string();
-                    details_lines.push(Line::from(vec![
-                        Span::styled(" ● ", Style::default().fg(Color::Yellow)),
-                        Span::styled(section_name, Style::default().bold().yellow().underlined())
-                    ]));
-                } else if !line.is_empty() {
-                    details_lines.push(Line::from(format!("   {}", line).white()));
-                }
-            }
+        if let Some(packet) = filtered.get(idx) {
+            let details_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+                .split(chunks[1]);
 
             f.render_widget(
-                Paragraph::new(details_lines)
-                    .block(Block::default().title(" 🔍 DETAILS ").borders(Borders::ALL).yellow())
+                Paragraph::new(packet.full_details.as_str())
+                    .block(Block::default().title(" INSPECTOR ").borders(Borders::ALL).yellow())
                     .wrap(Wrap { trim: false }),
-                insp_chunks[0]
+                details_chunks[0]
             );
 
             f.render_widget(
                 Paragraph::new(packet.hex_dump.as_str())
-                    .block(Block::default().title(" 🔢 RAW PAYLOAD ").borders(Borders::ALL).blue())
-                    .style(Style::default().fg(Color::Rgb(140, 140, 140))),
-                insp_chunks[1]
+                    .block(Block::default().title(" HEX ").borders(Borders::ALL).blue())
+                    .style(Style::default().fg(Color::Rgb(100, 100, 100))),
+                details_chunks[1]
             );
         }
     }
+}
 
-    // --- STATUS BAR ---
-    let is_at_bottom = list_state.selected().map_or(true, |i| i >= captured_packets.len().saturating_sub(1));
-    let status_line = Line::from(vec![
-        Span::styled(match mode { InputMode::Normal => " NORMAL ", InputMode::Search => " SEARCH " }, Style::default().bg(Color::Green).fg(Color::Black).bold()),
-        " ".into(),
-        if *paused { " PAUSED ".on_red().white().bold() } else { " LIVE ".on_green().white().bold() },
-        " │ Filter: ".dark_gray().into(),
-        filter.yellow().underlined(),
-        " │ ".dark_gray().into(),
-        if is_at_bottom && !*paused { " AUTO-SCROLL ".on_blue().white().bold() } else { " STATIC ".dark_gray() },
-    ]);
+fn draw_connections_tab(f: &mut Frame, area: Rect, connections: &HashMap<(String, String, String, String), u64>, throughput_history: &[u64], filter: &str, list_state: &mut ListState) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(10), Constraint::Min(0)])
+        .split(area);
 
-    f.render_widget(
-        Paragraph::new(status_line).block(Block::default().borders(Borders::ALL).title_bottom(Line::from(" [j/k] Scroll [g/G] Top/End [/] Search [Space] Pause [q] Quit ").centered().dark_gray())),
-        main_chunks[1]
+    // --- FIXED CHART LOGIC ---
+    // BarChart needs data that fits the visible width. We slice the history to fit.
+    let chart_width = chunks[0].width.saturating_sub(2);
+    let bar_width = 3; 
+    let gap = 1;
+    let max_bars = (chart_width as usize) / (bar_width + gap);
+    
+    let history_slice = if throughput_history.len() > max_bars {
+        &throughput_history[throughput_history.len() - max_bars..]
+    } else {
+        throughput_history
+    };
+
+    // Normalize or cap the data if it's too large for the widget to render bars effectively
+    let barchart_data: Vec<(&str, u64)> = history_slice.iter().map(|&v| ("", v)).collect();
+
+    let barchart = BarChart::default()
+        .block(Block::default()
+            .title(format!(" THROUGHPUT: {}/s ", format_bytes(*throughput_history.last().unwrap_or(&0))))
+            .borders(Borders::ALL).cyan())
+        .data(&barchart_data)
+        .bar_width(bar_width as u16)
+        .bar_gap(gap as u16)
+        .bar_style(Style::default().fg(Color::Cyan))
+        .bar_set(bar::NINE_LEVELS);
+    
+    f.render_widget(barchart, chunks[0]);
+
+    // --- CONNECTION LIST ---
+    let mut sorted: Vec<_> = connections.iter().collect();
+    sorted.sort_by(|a, b| b.1.cmp(a.1));
+
+    let items: Vec<ListItem> = sorted.into_iter()
+        .filter(|(key, _)| filter.is_empty() || format!("{:?}", key).to_lowercase().contains(&filter.to_lowercase()))
+        .map(|(key, &bytes)| {
+            let (src, dst, proto, app) = key;
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{:<15}", app), Style::default().fg(Color::Green)),
+                format!(" │ {} -> {} │ {} │ ", src, dst, proto).into(),
+                Span::styled(format_bytes(bytes), Style::default().fg(Color::Cyan).bold()),
+            ]))
+        }).collect();
+
+    f.render_stateful_widget(
+        List::new(items)
+            .block(Block::default().title(" SESSIONS ").borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)))
+            .highlight_style(Style::default().bg(Color::Rgb(30, 30, 30))),
+        chunks[1],
+        list_state,
     );
 }

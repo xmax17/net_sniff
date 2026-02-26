@@ -4,12 +4,14 @@ mod process;
 
 use crate::capture::{parse_packet_full, PacketData};
 use crate::process::ProcessResolver;
+use chrono::Local;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, widgets::ListState, Terminal};
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -17,6 +19,12 @@ use std::time::{Duration, Instant};
 
 #[derive(PartialEq, Debug)]
 pub enum InputMode { Normal, Search }
+
+#[derive(PartialEq, Debug, Clone, Copy)]
+pub enum Tab {
+    Feed,
+    Connections,
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Device Selection
@@ -42,17 +50,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 3. Shared State & Channels
     let (tx, rx) = mpsc::channel::<PacketData>();
     let resolver: Arc<Mutex<ProcessResolver>> = Arc::new(Mutex::new(ProcessResolver::new()));
+    let save_file: Arc<Mutex<Option<pcap::Savefile>>> = Arc::new(Mutex::new(None));
     
+    // App state
+    let mut active_tab = Tab::Feed;
+    let mut connections: HashMap<(String, String, String, String), u64> = HashMap::new();
+    let mut feed_list_state = ListState::default();
+    let mut connections_list_state = ListState::default();
     let mut local_packets: Vec<PacketData> = Vec::new();
-    let mut list_state = ListState::default();
     let mut input_mode = InputMode::Normal;
     let mut filter_text = String::new();
     let mut is_paused = false;
+    let mut is_saving = false;
+    
+    // Throughput tracking
+    let mut throughput_history: Vec<u64> = vec![0; 200];
+    let mut bytes_current_second = 0;
+    let mut last_tick = Instant::now();
 
     // 4. Capture Thread
     let resolver_cap = Arc::clone(&resolver);
+    let save_file_capture = Arc::clone(&save_file);
+    
+    // FIX: Clone the device so the thread can own one copy while main() keeps the other
+    let device_for_thread = selected_device.clone();
+    
     thread::spawn(move || {
-        let mut cap = pcap::Capture::from_device(selected_device)
+        let mut cap = pcap::Capture::from_device(device_for_thread)
             .unwrap()
             .promisc(true)
             .immediate_mode(true) 
@@ -62,6 +86,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut last_refresh = Instant::now();
 
         while let Ok(packet) = cap.next_packet() {
+            // Log to file if active
+            
+            if let Ok(mut guard) = save_file_capture.lock() {
+                if let Some(file) = guard.as_mut() {
+                    file.write(&packet);
+                }
+            }
+            
             // Refresh process mappings every 2s
             if last_refresh.elapsed() > Duration::from_secs(2) {
                 if let Ok(mut res) = resolver_cap.lock() {
@@ -71,7 +103,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let mut app_name = String::from("Unknown");
-            if let Ok(p) = etherparse::SlicedPacket::from_ethernet(&packet.data) {
+            
+            // Try SLL first (for 'any' device) then Ethernet
+            let parsed_headers = etherparse::SlicedPacket::from_linux_sll(&packet.data)
+                .or_else(|_| etherparse::SlicedPacket::from_ethernet(&packet.data));
+
+            if let Ok(p) = parsed_headers {
                 if let Some(t) = p.transport {
                     let (src, dst) = match t {
                         etherparse::TransportSlice::Tcp(s) => (s.source_port(), s.destination_port()),
@@ -79,14 +116,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         _ => (0, 0),
                     };
 
-                    app_name = resolver_cap.lock().unwrap().resolve_port(src);
-                    if app_name == "Unknown" && dst > 0 {
-                        app_name = resolver_cap.lock().unwrap().resolve_port(dst);
+                    if let Ok(res_guard) = resolver_cap.lock() {
+                        app_name = res_guard.resolve_port(src);
+                        if app_name == "Unknown" && dst > 0 {
+                            app_name = res_guard.resolve_port(dst);
+                        }
                     }
                 }
             }
 
             if let Some(parsed) = parse_packet_full(&packet.data, app_name) {
+                if parsed.proto_label == "SSDP" 
+           || parsed.dest.contains("239.255.255.250") 
+           || parsed.dest.contains("ff05::c") // Catch the IPv6 version too!
+        {
+            continue; // Skip this packet and move to the next one
+        }
                 let _ = tx.send(parsed);
             }
         }
@@ -94,86 +139,131 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 5. UI Loop
     loop {
-        // Check if we should autoscroll before adding new packets
-        let is_at_bottom = match list_state.selected() {
-            Some(i) => i >= local_packets.len().saturating_sub(1),
-            None => true,
-        };
-
         let mut received_new = false;
+        
+        // Handle incoming packets
         while let Ok(packet) = rx.try_recv() {
+            
             if !is_paused {
+                let key = (
+                    packet.source.clone(),
+                    packet.dest.clone(),
+                    packet.proto_label.clone(),
+                    packet.app_name.clone(),
+                );
+                *connections.entry(key).or_insert(0) += packet.length as u64;
+                bytes_current_second += packet.length as u64;
+
                 local_packets.push(packet);
                 received_new = true;
-                if local_packets.len() > 1000 { local_packets.remove(0); }
+                if local_packets.len() > 1000 {
+                    local_packets.remove(0);
+                }
             }
         }
 
-        let filtered: Vec<&PacketData> = local_packets.iter()
+        // Update throughput graph
+        if last_tick.elapsed() >= Duration::from_secs(1) {
+            throughput_history.push(bytes_current_second);
+            if throughput_history.len() > 200 { throughput_history.remove(0); }
+            bytes_current_second = 0;
+            last_tick = Instant::now();
+        }
+
+        // Data Filtering
+        let filtered_packets: Vec<&PacketData> = local_packets.iter()
             .filter(|p| {
-                filter_text.is_empty() 
+                filter_text.is_empty()
                 || p.summary.to_lowercase().contains(&filter_text.to_lowercase())
                 || p.app_name.to_lowercase().contains(&filter_text.to_lowercase())
             })
             .collect();
 
-        // Autoscroll logic: follow if we were at the bottom and got new packets
-        if received_new && is_at_bottom && !is_paused && !filtered.is_empty() {
-            list_state.select(Some(filtered.len() - 1));
+        // Autoscroll logic
+        if !is_paused && received_new && active_tab == Tab::Feed {
+            if !filtered_packets.is_empty() {
+                feed_list_state.select(Some(filtered_packets.len() - 1));
+            }
         }
 
+        // Render
         terminal.draw(|f| {
-            ui::draw(f, &filtered, &is_paused, &filter_text, &input_mode, &mut list_state);
+            ui::draw(
+                f,
+                active_tab,
+                &local_packets,
+                &connections,
+                &throughput_history,
+                &is_paused,
+                &is_saving,
+                &filter_text,
+                &input_mode,
+                &mut feed_list_state,
+                &mut connections_list_state,
+            );
         })?;
 
+        // Input Handling
         if event::poll(Duration::from_millis(10))? {
             if let Event::Key(key) = event::read()? {
                 match input_mode {
                     InputMode::Normal => match key.code {
                         KeyCode::Char('q') => break,
+                        KeyCode::Char('1') => active_tab = Tab::Feed,
+                        KeyCode::Char('2') => active_tab = Tab::Connections,
                         KeyCode::Char('/') => input_mode = InputMode::Search,
                         KeyCode::Char(' ') => is_paused = !is_paused,
                         KeyCode::Char('c') => {
                             local_packets.clear();
-                            list_state.select(None);
+                            connections.clear();
                         }
-                        KeyCode::Char('g') => {
-    list_state.select(Some(0));
-},
-
-// New: Jump to Bottom (G)
-KeyCode::Char('G') => {
-    if !filtered.is_empty() {
-        list_state.select(Some(filtered.len() - 1));
-    }
-},
+                        KeyCode::Char('w') => {
+                            let mut guard = save_file.lock().unwrap();
+                            if guard.is_some() {
+                                *guard = None;
+                                is_saving = false;
+                            } else {
+                                let ts = Local::now().format("%Y-%m-%d_%H-%M-%S");
+                                let filename = format!("net-sniff_{}.pcap", ts);
+                                // FIX: Use a temporary capture handle to spawn the savefile
+                                if let Ok(tmp_cap) = pcap::Capture::from_device(selected_device.clone()).unwrap().open() {
+                                    if let Ok(file) = tmp_cap.savefile(filename) {
+                                        *guard = Some(file);
+                                        is_saving = true;
+                                    }
+                                }
+                            }
+                        }
                         KeyCode::Char('j') | KeyCode::Down => {
-                            let i = match list_state.selected() {
-                                Some(i) => if i >= filtered.len().saturating_sub(1) { 0 } else { i + 1 },
+                            let state = if active_tab == Tab::Feed { &mut feed_list_state } else { &mut connections_list_state };
+                            let i = match state.selected() {
+                                Some(i) => i + 1,
                                 None => 0,
                             };
-                            list_state.select(Some(i));
+                            state.select(Some(i));
                         }
                         KeyCode::Char('k') | KeyCode::Up => {
-                            let i = match list_state.selected() {
-                                Some(i) => if i == 0 { filtered.len().saturating_sub(1) } else { i - 1 },
+                            let state = if active_tab == Tab::Feed { &mut feed_list_state } else { &mut connections_list_state };
+                            let i = match state.selected() {
+                                Some(i) => i.saturating_sub(1),
                                 None => 0,
                             };
-                            list_state.select(Some(i));
+                            state.select(Some(i));
                         }
                         _ => {}
                     },
                     InputMode::Search => match key.code {
                         KeyCode::Enter | KeyCode::Esc => input_mode = InputMode::Normal,
                         KeyCode::Char(c) => filter_text.push(c),
-                        KeyCode::Backspace => { filter_text.pop(); }
+                        KeyCode::Backspace => { filter_text.pop(); },
                         _ => {}
-                    },
+                    }
                 }
             }
         }
     }
 
+    // Cleanup
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     Ok(())

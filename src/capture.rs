@@ -5,6 +5,10 @@ pub struct PacketData {
     pub full_details: String,
     pub hex_dump: String,
     pub app_name: String,
+    pub source: String,
+    pub dest: String,
+    pub proto_label: String,
+    pub length: usize,
 }
 
 pub fn parse_packet_full(data: &[u8], app_name: String) -> Option<PacketData> {
@@ -80,5 +84,16 @@ pub fn parse_packet_full(data: &[u8], app_name: String) -> Option<PacketData> {
         format!("{:<48} | {}", hex, ascii)
     }).collect::<Vec<_>>().join("\n");
 
-    Some(PacketData { summary, full_details: details, hex_dump, app_name })
+    let length = data.len();
+
+    Some(PacketData {
+        summary,
+        full_details: details,
+        hex_dump,
+        app_name,
+        source,
+        dest,
+        proto_label,
+        length,
+    })
 }
