@@ -57,34 +57,37 @@ impl ProcessResolver {
         }
     }
 
-    pub fn resolve_port(&self, _local_port: u16) -> String {
-        #[cfg(target_os = "linux")]
-        {
-            if let Ok(tcp) = procfs::net::tcp() {
-                if let Some(entry) = tcp.iter().find(|e| e.local_address.port() == _local_port) {
-                    if let Some(name) = self.inode_to_name.get(&entry.inode) {
-                        return name.clone();
-                    }
-                }
-            }
-            if let Ok(udp) = procfs::net::udp() {
-                if let Some(entry) = udp.iter().find(|e| e.local_address.port() == _local_port) {
-                    if let Some(name) = self.inode_to_name.get(&entry.inode) {
-                        return name.clone();
-                    }
+pub fn resolve_port(&self, _local_port: u16) -> String {
+    #[cfg(target_os = "linux")]
+    {
+        // Check TCP Table
+        if let Ok(tcp) = procfs::net::tcp() {
+            if let Some(entry) = tcp.iter().find(|e| e.local_address.port() == _local_port) {
+                // Use .get().cloned() to return early ONLY if found
+                if let Some(name) = self.inode_to_name.get(&entry.inode) {
+                    return name.clone();
                 }
             }
         }
-
-        #[cfg(target_os = "macos")]
-        {
-            // Placeholder for Mac logic
-            "macOS-App".to_string()
+        
+        // Check UDP Table
+        if let Ok(udp) = procfs::net::udp() {
+            if let Some(entry) = udp.iter().find(|e| e.local_address.port() == _local_port) {
+                if let Some(name) = self.inode_to_name.get(&entry.inode) {
+                    return name.clone();
+                }
+            }
         }
-
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        {
-            "Unknown".to_string()
-        }
+        // IMPORTANT: We need a fallback within the Linux block 
+        // if the port was found in tables but not in our inode map
     }
+
+    #[cfg(target_os = "macos")]
+    {
+        return "macOS-App".to_string();
+    }
+
+    // Final fallback for all platforms
+    "Unknown".to_string()
+}
 }
