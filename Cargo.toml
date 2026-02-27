@@ -10,6 +10,9 @@ pcap = "2.4.0"
 ratatui = "0.30.0"
 serde = "1.0.228"
 tokio = "1.49.0"
-procfs = "0.16"
+# Move these here so they work on Mac too!
 sysinfo = "0.30"
-chrono = "0.4.44"
+chrono = "0.4"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+procfs = "0.16"
