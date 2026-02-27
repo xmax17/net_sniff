@@ -167,15 +167,12 @@ fn draw_feed_tab(
         })
         .collect();
 
-    // LEFT: List rendering
+    // --- LEFT: LIST RENDERING ---
     let items: Vec<ListItem> = filtered
         .iter()
         .map(|p| {
             ListItem::new(Line::from(vec![
-                Span::styled(
-                    format!("{:<12}", p.app_name),
-                    Style::default().fg(Color::Green),
-                ),
+                Span::styled(format!("{:<12}", p.app_name), Style::default().fg(Color::Green)),
                 Span::raw(format!(" │ {}", p.summary)).white(),
             ]))
         })
@@ -183,34 +180,32 @@ fn draw_feed_tab(
 
     f.render_stateful_widget(
         List::new(items)
-            .block(
-                Block::default()
-                    .title(" PACKET STREAM ")
-                    .borders(Borders::ALL)
-                    .green(),
-            )
+            .block(Block::default().title(" PACKET STREAM ").borders(Borders::ALL).green())
             .highlight_style(Style::default().bg(Color::Rgb(40, 40, 40)).bold()),
         chunks[0],
         list_state,
     );
 
-    // RIGHT: DYNAMIC INSPECTOR WITH TOP TALKERS
+    // --- RIGHT: DYNAMIC INSPECTOR ---
+    // If a specific packet is selected, show the Deep Inspector (Headers + Hex)
     if let Some(p_idx) = list_state.selected() {
         if let Some(packet) = filtered.get(p_idx) {
+            let display_text = format!(
+                "{}\n\n--- RAW PAYLOAD (HEX) ---\n{}", 
+                packet.full_details, 
+                packet.hex_dump
+            );
+
             f.render_widget(
-                Paragraph::new(packet.full_details.clone())
-                    .block(
-                        Block::default()
-                            .title(" PACKET DETAIL ")
-                            .borders(Borders::ALL)
-                            .yellow(),
-                    )
+                Paragraph::new(display_text)
+                    .block(Block::default().title(" 🔍 PACKET INSPECTOR ").borders(Borders::ALL).yellow())
                     .wrap(Wrap { trim: false }),
                 chunks[1],
             );
         }
-    } else if let Some(s_idx) = spike_idx {
-        // Calculate Top Talker for this specific spike
+    } 
+    // Otherwise, if we are scrubbing through a spike, show the Spike Analysis
+    else if let Some(s_idx) = spike_idx {
         let mut app_counts = HashMap::new();
         for p in &filtered {
             *app_counts.entry(&p.app_name).or_insert(0) += 1;
@@ -228,26 +223,29 @@ fn draw_feed_tab(
               Total Load:      {}\n\
               Packet Count:    {}\n\n\
               --- 🏆 TOP TALKER ---\n\
-              Primary App:     {}\n\n\
+              Primary App:      {}\n\n\
               --- ⌨️  NAVIGATION ---\n\
               [↑/↓] Browse specific packets\n\
               [←/→] Shift time window",
             history.len().saturating_sub(1 + s_idx),
             format_bytes(val),
-            filtered.len(),
+            filtered.iter().count(),
             top_app
         );
 
         f.render_widget(
             Paragraph::new(info)
-                .block(
-                    Block::default()
-                        .title(" SPIKE SUMMARY ")
-                        .borders(Borders::ALL)
-                        .cyan()
-                        .bold(),
-                )
+                .block(Block::default().title(" SPIKE SUMMARY ").borders(Borders::ALL).cyan().bold())
                 .wrap(Wrap { trim: false }),
+            chunks[1],
+        );
+    } 
+    // Default state: Nothing selected
+    else {
+        f.render_widget(
+            Paragraph::new("\n\nSelect a packet or scrub the timeline to begin inspection.")
+                .dark_gray()
+                .centered(),
             chunks[1],
         );
     }
