@@ -3,7 +3,7 @@ mod process;
 mod ui;
 
 use crate::capture::{PacketData, parse_packet_full};
-use crate::process::ProcessResolver;
+use crate::process::{ProcessResolver, run_ss_updater};
 use chrono::Local;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -13,7 +13,7 @@ use crossterm::{
 use ratatui::{Terminal, backend::CrosstermBackend, widgets::ListState};
 use std::collections::HashMap;
 use std::io::{self, Write};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, RwLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 3. Shared State & Channels
     let (tx, rx) = mpsc::channel::<PacketData>();
-    let resolver: Arc<Mutex<ProcessResolver>> = Arc::new(Mutex::new(ProcessResolver::new()));
+    let resolver = Arc::new(RwLock::new(ProcessResolver::new()));
     let save_file: Arc<Mutex<Option<pcap::Savefile>>> = Arc::new(Mutex::new(None));
 
     // App state
@@ -74,10 +74,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut frozen_history: Vec<u64> = Vec::new(); // Store the chart state here when paused
     // 4. Capture Thread
     let resolver_cap = Arc::clone(&resolver);
+    let resolver_ss = Arc::clone(&resolver);
     let save_file_capture = Arc::clone(&save_file);
 
     // FIX: Clone the device so the thread can own one copy while main() keeps the other
     let device_for_thread = selected_device.clone();
+    
+    thread::spawn(move || {
+        run_ss_updater(resolver_ss);
+    });
 
     thread::spawn(move || {
         let mut cap = pcap::Capture::from_device(device_for_thread)
@@ -98,13 +103,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            // Refresh process mappings every 2s
-            if last_refresh.elapsed() > Duration::from_secs(2) {
-                if let Ok(mut res) = resolver_cap.lock() {
-                    res.refresh();
-                }
-                last_refresh = Instant::now();
-            }
 
             let mut app_name = String::from("Unknown");
 
@@ -124,10 +122,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         _ => (0, 0),
                     };
 
-                    if let Ok(res_guard) = resolver_cap.lock() {
-                        app_name = res_guard.resolve_port(src);
-                        if app_name == "Unknown" && dst > 0 {
-                            app_name = res_guard.resolve_port(dst);
+                    if let Ok(res_guard) = resolver_cap.read() {
+                        app_name = res_guard.resolve(src);
+                        if app_name == "Unknown" {
+                            app_name = res_guard.resolve(dst);
+                        }
+                        if app_name == "Unknown" && (src == 443 || dst == 443) {
+                           app_name = "HTTPS (Browser/Service)".to_string();
                         }
                     }
                 }

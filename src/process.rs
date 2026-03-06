@@ -1,4 +1,9 @@
 use std::collections::HashMap;
+use std::sync::{Arc,RwLock};
+use std::{option, thread, time, u16};
+use std::time::Duration;
+use std::process::Command;
+use std::str;
 
 #[cfg(target_os = "linux")]
 use procfs;
@@ -8,86 +13,73 @@ use procfs;
 #[cfg(target_os = "macos")]
 use sysinfo::System;
 
-pub struct ProcessResolver {
-    #[allow(dead_code)]
-    inode_to_name: HashMap<u64, String>,
-    #[cfg(target_os = "macos")]
-    sys: System,
-}
 
+pub struct ProcessResolver {
+    port_to_app: HashMap<u16,(String, time::Instant)>,
+    last_updated: time::Instant
+}
 impl ProcessResolver {
     pub fn new() -> Self {
-        #[cfg(target_os = "macos")]
-        let mut sys = System::new_all();
-        #[cfg(target_os = "macos")]
-        sys.refresh_all();
-
-        let mut resolver = Self {
-            inode_to_name: HashMap::new(),
-            #[cfg(target_os = "macos")]
-            sys,
-        };
-        resolver.refresh();
-        resolver
-    }
-
-    pub fn refresh(&mut self) {
-        self.inode_to_name.clear();
-
-        #[cfg(target_os = "linux")]
-        {
-            if let Ok(all_proc) = procfs::process::all_processes() {
-                for p in all_proc.flatten() {
-                    if let (Ok(stat), Ok(fds)) = (p.stat(), p.fd()) {
-                        let name = stat.comm;
-                        for fd in fds.flatten() {
-                            if let procfs::process::FDTarget::Socket(inode) = fd.target {
-                                self.inode_to_name.insert(inode, name.clone());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            // Direct method call, no trait import needed in 0.30+
-            self.sys.refresh_processes();
+        Self{
+            port_to_app: HashMap::new(),
+            last_updated: time::Instant::now(),
         }
     }
-
-pub fn resolve_port(&self, _local_port: u16) -> String {
-    #[cfg(target_os = "linux")]
-    {
-        // Check TCP Table
-        if let Ok(tcp) = procfs::net::tcp() {
-            if let Some(entry) = tcp.iter().find(|e| e.local_address.port() == _local_port) {
-                // Use .get().cloned() to return early ONLY if found
-                if let Some(name) = self.inode_to_name.get(&entry.inode) {
-                    return name.clone();
-                }
-            }
-        }
-        
-        // Check UDP Table
-        if let Ok(udp) = procfs::net::udp() {
-            if let Some(entry) = udp.iter().find(|e| e.local_address.port() == _local_port) {
-                if let Some(name) = self.inode_to_name.get(&entry.inode) {
-                    return name.clone();
-                }
-            }
-        }
-        // IMPORTANT: We need a fallback within the Linux block 
-        // if the port was found in tables but not in our inode map
+    pub fn resolve(&self,port: u16) -> String {
+self.port_to_app
+        .get(&port)
+        .map(|(name, _)| name.clone()) // Just take the name
+        .unwrap_or_else(|| "Unknown".to_string())
     }
+    pub fn migrate(&mut self, new_map:HashMap<u16,String>) {
+        let now = time::Instant::now() ;
 
-    #[cfg(target_os = "macos")]
-    {
-        return "macOS-App".to_string();
+        for (port,name) in new_map  {
+            self.port_to_app.insert(port, (name,now));
+        }
+
+        self.port_to_app.retain(|_port,(_name,last_seen)|{
+            now.duration_since(*last_seen) < time::Duration::from_secs(30)
+        });
+        self.last_updated = now
     }
-
-    // Final fallback for all platforms
-    "Unknown".to_string()
 }
+#[cfg(target_os = "linux")]
+pub fn run_ss_updater(resolever:Arc<RwLock<ProcessResolver>>) {
+                        
+        loop {
+            
+            let ss_output = Command::new("ss")
+                .arg("-tunap")
+                .output()
+                .expect("error exec ss command");
+            let ss_output_str = str::from_utf8(&ss_output.stdout).expect("not valid utf8");
+
+            let mut temp_map =HashMap::new();
+
+
+            for line in ss_output_str.lines() {
+                if let Some((port,app_name)) = parse_ss(line) {
+                    temp_map.insert(port, app_name);
+                }
+            }
+            if let Ok(mut guard) = resolever.write() {
+                guard.migrate(temp_map);
+            } 
+                    thread::sleep(Duration::from_secs(1));
+
+        };
+
+}
+
+#[cfg(target_os = "linux")]
+fn parse_ss(ss_output:&str) -> Option<(u16,String)> {
+    let cols:Vec<&str> = ss_output.split_whitespace().collect();
+    
+    if cols.len() < 7 {return None;}
+
+    let port = cols[4].rsplit(":").next()?.parse::<u16>().ok()?;
+    let app_name = cols[6].split('"').nth(1)?.to_string();
+
+    Some((port,app_name))
 }
