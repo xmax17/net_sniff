@@ -83,3 +83,50 @@ fn parse_ss(ss_output:&str) -> Option<(u16,String)> {
 
     Some((port,app_name))
 }
+
+
+#[cfg(target_os = "macos")]
+pub fn run_ss_updater(resolever:Arc<RwLock<ProcessResolver>>) {
+
+    loop {
+
+        let output = Command::new("lsof")
+            .args(["-n","-P","-i","+c","0"])
+            .output()
+            .expect("error running lsof command");
+        let output_str = str::from_utf8(&output.stdout).expect("not valid utf8");
+        let mut hashmap = HashMap::new();
+        for line in output_str.lines() {
+            if let Some((port,app_name)) = parse_lsof(line){
+                hashmap.insert(port, app_name);
+            }
+        }
+        if let Ok(mut guard) = resolever.write(){
+            guard.migrate(hashmap);
+        }
+        thread::sleep(Duration::from_secs(1));
+
+
+
+    }
+    
+}
+#[cfg(target_os="macos")]
+fn parse_lsof(output:&str) -> Option<(u16,String)> {
+    
+    let cols:Vec<&str> = output.split_whitespace().collect();
+
+    if cols.len() < 8 {return None;}
+
+let name_col = cols[8];
+    let port_str = name_col.rsplit(':').next()?; 
+    
+    // Handle cases where lsof shows "127.0.0.1:443->1.2.3.4:5678"
+    let port_only = port_str.split("->").next()?;
+    
+    let port = port_only.parse::<u16>().ok()?;
+    let app_name = cols[0].to_string();
+
+    Some((port,app_name))
+
+}

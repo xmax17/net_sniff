@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex, RwLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
+
 #[derive(PartialEq, Debug)]
 pub enum InputMode {
     Normal,
@@ -162,7 +163,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
                 *connections.entry(key).or_insert(0) += packet.length as u64;
                 bytes_current_second += packet.length as u64;
-
                 local_packets.push(packet);
                 received_new = true;
                 if local_packets.len() > 1000 {
@@ -180,18 +180,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             bytes_current_second = 0;
             last_tick = Instant::now();
         }
-
         // Data Filtering
         let filtered_packets: Vec<&PacketData> = local_packets
             .iter()
             .filter(|p| {
                 filter_text.is_empty()
-                    || p.summary
-                        .to_lowercase()
-                        .contains(&filter_text.to_lowercase())
-                    || p.app_name
-                        .to_lowercase()
-                        .contains(&filter_text.to_lowercase())
+            || p.summary.to_lowercase().contains(&filter_text)
+            || p.app_name.to_lowercase().contains(&filter_text)
+            || p.source.to_lowercase().contains(&filter_text)
+            || p.dest.to_lowercase().contains(&filter_text)
             })
             .collect();
 
