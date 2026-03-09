@@ -41,6 +41,7 @@ pub fn draw(
             Constraint::Length(3),
             Constraint::Min(5),
             Constraint::Length(3),
+            Constraint::Length(3),
         ])
         .split(f.area());
 
@@ -79,6 +80,28 @@ pub fn draw(
             selected_spike_idx,
         ),
     }
+    let filter_style = if *mode == InputMode::Search {
+        Style::default().fg(Color::Yellow).bold() // Highlight when typing
+    } else {
+        Style::default().fg(Color::DarkGray) // Dim when just viewing
+    };
+
+    let filter_display = if filter.is_empty() && *mode != InputMode::Search {
+        " (Press '/' to filter results)".to_string()
+    } else {
+        format!(" {}", filter)
+    };
+
+    f.render_widget(
+        Paragraph::new(filter_display)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(filter_style)
+                    .title(Span::styled(" 🔍 FILTER ", filter_style)),
+            ),
+        main_chunks[2],
+    );
 
     // --- DYNAMIC FOOTER ---
     let mut status_line = vec![
@@ -127,7 +150,7 @@ pub fn draw(
                     .italic(),
             ),
         ),
-        main_chunks[2],
+        main_chunks[3],
     );
 }
 
@@ -145,7 +168,7 @@ fn draw_feed_tab(
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
-
+    let filter_low = filter.to_lowercase();
     // Filter packets to the specific spike window
     let filtered: Vec<&PacketData> = packets
         .iter()
@@ -162,7 +185,7 @@ fn draw_feed_tab(
                     false
                 }
             } else {
-                filter.is_empty() || p.summary.to_lowercase().contains(&filter.to_lowercase())
+                filter.is_empty() || p.summary.to_lowercase().contains(&filter_low) || p.app_name.to_lowercase().contains(&filter_low) 
             }
         })
         .collect();

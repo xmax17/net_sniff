@@ -184,11 +184,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let filtered_packets: Vec<&PacketData> = local_packets
             .iter()
             .filter(|p| {
-                filter_text.is_empty()
-            || p.summary.to_lowercase().contains(&filter_text)
-            || p.app_name.to_lowercase().contains(&filter_text)
-            || p.source.to_lowercase().contains(&filter_text)
-            || p.dest.to_lowercase().contains(&filter_text)
+             filter_text.is_empty()
+            || p.summary.to_lowercase().contains(&filter_text.to_lowercase())
+            || p.app_name.to_lowercase().contains(&filter_text.to_lowercase())
+            || p.source.to_lowercase().contains(&filter_text.to_lowercase())
+            || p.dest.to_lowercase().contains(&filter_text.to_lowercase())
             })
             .collect();
 
