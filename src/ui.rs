@@ -196,6 +196,10 @@ fn draw_feed_tab(
         .map(|p| {
             ListItem::new(Line::from(vec![
                 Span::styled(format!("{:<12}", p.app_name), Style::default().fg(Color::Green)),
+                Span::styled(
+                format!(" {} ", p.country_code), 
+                Style::default().fg(Color::Yellow).bold()
+            ),
                 Span::raw(format!(" │ {}", p.summary)).white(),
             ]))
         })

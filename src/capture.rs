@@ -2,6 +2,8 @@ use chrono::{DateTime, Local};
 use etherparse::{NetSlice, SlicedPacket, TransportSlice};
 use std::time::Instant;
 
+use crate::geo::GeoResolver;
+
 pub struct PacketData {
     pub summary: String,
     pub timestamp: Instant, // For the Spike Inspector math
@@ -13,9 +15,10 @@ pub struct PacketData {
     pub dest: String,
     pub proto_label: String,
     pub length: usize,
+    pub country_code: String,
 }
 
-pub fn parse_packet_full(data: &[u8], app_name: String) -> Option<PacketData> {
+pub fn parse_packet_full(data: &[u8], app_name: String,geo_resolver:&GeoResolver) -> Option<PacketData> {
     let value = SlicedPacket::from_ethernet(data).ok()?;
 
     let mut source = String::from("Unknown");
@@ -64,6 +67,8 @@ pub fn parse_packet_full(data: &[u8], app_name: String) -> Option<PacketData> {
         details.push_str("\n--- TRANSPORT LAYER ---\n");
         match transport {
             TransportSlice::Tcp(tcp) => {
+                source = format!("{}:{}", source, tcp.source_port());
+                dest = format!("{}:{}", dest, tcp.destination_port());
                 let port = tcp.destination_port();
                 proto_label = match port {
                     80 => "HTTP".into(),
@@ -79,6 +84,8 @@ pub fn parse_packet_full(data: &[u8], app_name: String) -> Option<PacketData> {
                 ));
             }
             TransportSlice::Udp(udp) => {
+                source = format!("{}:{}", source, udp.source_port());
+                dest = format!("{}:{}", dest, udp.destination_port());
                 proto_label = format!("UDP:{}", udp.destination_port());
                 details.push_str(&format!(
                     "Type:  UDP\nPorts: {} -> {}\nLen:   {}\n",
@@ -126,6 +133,29 @@ pub fn parse_packet_full(data: &[u8], app_name: String) -> Option<PacketData> {
 
     let length = data.len();
 
+    let src = source.clone();
+    let dst = dest.clone();
+
+let remote_ip = if is_local_ip(&src) { &dst } else { &src };
+
+// Logic to strip port from IPv4 or IPv6
+let ip_only = if remote_ip.contains(']') {
+    // Case: [2001:db8::1]:443 -> 2001:db8::1
+    remote_ip
+        .trim_start_matches('[')
+        .split("]:")
+        .next()
+        .unwrap_or(remote_ip)
+} else if remote_ip.split(':').count() > 2 {
+    // Case: 2001:db8::1 (IPv6 without brackets/port)
+    remote_ip
+} else {
+    // Case: 1.2.3.4:80 -> 1.2.3.4
+    remote_ip.split(':').next().unwrap_or(remote_ip)
+};
+
+let country = geo_resolver.resolve(&ip_only);
+
     Some(PacketData {
         timestamp: Instant::now(),
         time_label: Local::now().format("%H:%M:%S").to_string(),
@@ -137,5 +167,23 @@ pub fn parse_packet_full(data: &[u8], app_name: String) -> Option<PacketData> {
         dest,
         proto_label,
         length,
+        country_code:country,
     })
+}
+fn is_local_ip(ip: &str) -> bool {
+if ip.starts_with("127.") || ip.starts_with("192.168.") || 
+       ip.starts_with("10.") || ip.starts_with("172.") {
+        return true;
+    }
+
+    // IPv6 Checks
+    let ip_low = ip.to_lowercase();
+    if ip_low.contains("::1") ||       // Loopback
+       ip_low.starts_with("fe80:") ||  // Link-local
+       ip_low.starts_with("fc00:") ||  // Unique local
+       ip_low.starts_with("fd00:") {   // Unique local
+        return true;
+    }
+
+    false
 }

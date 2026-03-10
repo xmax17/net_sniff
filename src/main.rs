@@ -1,9 +1,10 @@
 mod capture;
 mod process;
 mod ui;
-
+mod geo;
 use crate::capture::{PacketData, parse_packet_full};
 use crate::process::{ProcessResolver, run_ss_updater};
+use crate::geo::GeoResolver;
 use chrono::Local;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -54,6 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 3. Shared State & Channels
     let (tx, rx) = mpsc::channel::<PacketData>();
     let resolver = Arc::new(RwLock::new(ProcessResolver::new()));
+    let geo_resolver = GeoResolver::new();
     let save_file: Arc<Mutex<Option<pcap::Savefile>>> = Arc::new(Mutex::new(None));
 
     // App state
@@ -135,7 +137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            if let Some(parsed) = parse_packet_full(&packet.data, app_name) {
+            if let Some(parsed) = parse_packet_full(&packet.data, app_name,&geo_resolver) {
                 if parsed.proto_label == "SSDP"
                     || parsed.dest.contains("239.255.255.250")
                     || parsed.dest.contains("ff05::c")

@@ -39,7 +39,7 @@ self.port_to_app
         }
 
         self.port_to_app.retain(|_port,(_name,last_seen)|{
-            now.duration_since(*last_seen) < time::Duration::from_secs(30)
+            now.duration_since(*last_seen) < time::Duration::from_secs(5)
         });
         self.last_updated = now
     }
@@ -116,15 +116,17 @@ fn parse_lsof(output:&str) -> Option<(u16,String)> {
     
     let cols:Vec<&str> = output.split_whitespace().collect();
 
-    if cols.len() < 8 {return None;}
+    if cols.len() < 9 {return None;}
 
-let name_col = cols[8];
-    let port_str = name_col.rsplit(':').next()?; 
+let name_col = cols[8]; // e.g., "192.168.1.10:56789->1.2.3.4:443"
+
+    // 1. Get the local side (everything before the arrow)
+    let local_part = name_col.split("->").next()?; 
     
-    // Handle cases where lsof shows "127.0.0.1:443->1.2.3.4:5678"
-    let port_only = port_str.split("->").next()?;
+    // 2. Get the port from the local side (the last part after the colon)
+    let port_str = local_part.rsplit(':').next()?;
     
-    let port = port_only.parse::<u16>().ok()?;
+    let port = port_str.parse::<u16>().ok()?;
     let app_name = cols[0].to_string();
 
     Some((port,app_name))
