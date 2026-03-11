@@ -200,7 +200,7 @@ fn draw_feed_tab(
                 format!(" {} ", p.country_code), 
                 Style::default().fg(Color::Yellow).bold()
             ),
-                Span::raw(format!(" │ {}", p.summary)).white(),
+                Span::styled(format!("  |  {}",p.summary), Style::default().fg(Color::Cyan)),
             ]))
         })
         .collect();
