@@ -60,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // App state
     let mut active_tab = Tab::Feed;
-    let mut connections: HashMap<(String, String, String, String), u64> = HashMap::new();
+    let mut connections: HashMap<(String, String, String, String,String), u64> = HashMap::new();
     let mut feed_list_state = ListState::default();
     let mut connections_list_state = ListState::default();
     let mut local_packets: Vec<PacketData> = Vec::new();
@@ -162,6 +162,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     packet.dest.clone(),
                     packet.proto_label.clone(),
                     packet.app_name.clone(),
+                    packet.country_code.clone(),
                 );
                 *connections.entry(key).or_insert(0) += packet.length as u64;
                 bytes_current_second += packet.length as u64;

@@ -24,7 +24,7 @@ pub fn draw(
     f: &mut Frame,
     active_tab: Tab,
     local_packets: &[PacketData],
-    connections: &HashMap<(String, String, String, String), u64>,
+    connections: &HashMap<(String, String, String, String,String), u64>,
     throughput_history: &[u64],
     paused: &bool,
     is_saving: &bool,
@@ -281,7 +281,7 @@ fn draw_feed_tab(
 fn draw_connections_tab(
     f: &mut Frame,
     area: Rect,
-    connections: &HashMap<(String, String, String, String), u64>,
+    connections: &HashMap<(String, String, String, String,String), u64>,
     throughput: &[u64],
     filter: &str,
     list_state: &mut ListState,
@@ -357,9 +357,9 @@ fn draw_connections_tab(
     let items: Vec<ListItem> = filtered_conns
         .iter()
         .map(|(key, bytes)| {
-            let (_src, _dst, proto, app) = key;
+            let (_src, _dst, proto, app,country) = key;
             ListItem::new(Line::from(vec![
-                Span::styled(format!("{:<10}", app), Style::default().fg(Color::Green)),
+                Span::styled(format!("{:<10} | {}" , app,country), Style::default().fg(Color::Green)),
                 format!(" │ {} │ ", proto).into(),
                 Span::styled(format_bytes(**bytes), Style::default().fg(Color::Cyan)),
             ]))
@@ -381,14 +381,15 @@ fn draw_connections_tab(
 
     if let Some(idx) = list_state.selected() {
         if let Some((key, bytes)) = filtered_conns.get(idx) {
-            let (src, dst, proto, app) = key;
+            let (src, dst, proto, app,country) = key;
             let info = format!(
-                "Application: {}\nProtocol:    {}\nSource:      {}\nDestination: {}\nTotal Data:  {}",
+                "Application: {}\nCountry code: {}\nProtocol:    {}\nSource:      {}\nDestination: {}\nTotal Data:  {}",
                 app,
+                country,
                 proto,
                 src,
                 dst,
-                format_bytes(**bytes)
+                format_bytes(**bytes),
             );
             f.render_widget(
                 Paragraph::new(info)

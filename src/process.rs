@@ -39,7 +39,7 @@ self.port_to_app
         }
 
         self.port_to_app.retain(|_port,(_name,last_seen)|{
-            now.duration_since(*last_seen) < time::Duration::from_secs(5)
+            now.duration_since(*last_seen) < time::Duration::from_secs(3)
         });
         self.last_updated = now
     }

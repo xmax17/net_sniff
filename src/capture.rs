@@ -155,6 +155,7 @@ let ip_only = if remote_ip.contains(']') {
 };
 
 let country = geo_resolver.resolve(&ip_only);
+details.push_str(&format!("country code: {}\n",country));
 
     Some(PacketData {
         timestamp: Instant::now(),
