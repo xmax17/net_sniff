@@ -2,7 +2,7 @@ mod capture;
 mod process;
 mod ui;
 mod geo;
-use crate::capture::{PacketData, parse_packet_full};
+use crate::capture::{GlobalStats, GraphData, PacketData, is_local_ip, parse_packet_full};
 use crate::process::{ProcessResolver, run_ss_updater};
 use crate::geo::GeoResolver;
 use chrono::Local;
@@ -30,6 +30,7 @@ pub enum Tab {
     Feed,
     Connections,
 }
+
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Device Selection
@@ -70,11 +71,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut is_saving = false;
     let mut selected_spike_index: Option<usize> = None; // Initialize here
     // Throughput tracking
-    let mut throughput_history: Vec<u64> = vec![0; 200];
-    let mut bytes_current_second = 0;
+    let mut global_stats = GlobalStats::new(200); // Fixed '2OO' typo
+    let mut rx_bytes_current_second = 0;
+    let mut tx_bytes_current_second = 0;
     let mut last_tick = Instant::now();
     let mut pause_time: Option<Instant> = None;
-    let mut frozen_history: Vec<u64> = Vec::new(); // Store the chart state here when paused
+    let mut frozen_history: Vec<u64> = Vec::new();
+    let mut frozen_rx: Vec<u64> = Vec::new();
+    let mut frozen_tx: Vec<u64> = Vec::new();
     // 4. Capture Thread
     let resolver_cap = Arc::clone(&resolver);
     let resolver_ss = Arc::clone(&resolver);
@@ -165,7 +169,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     packet.country_code.clone(),
                 );
                 *connections.entry(key).or_insert(0) += packet.length as u64;
-                bytes_current_second += packet.length as u64;
+                if !is_local_ip(&packet.source){
+                    rx_bytes_current_second += packet.length as u64;
+                } else {
+                    tx_bytes_current_second += packet.length as u64;
+                }
                 local_packets.push(packet);
                 received_new = true;
                 if local_packets.len() > 1000 {
@@ -176,11 +184,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Update throughput graph
         if last_tick.elapsed() >= Duration::from_secs(1) {
-            throughput_history.push(bytes_current_second);
-            if throughput_history.len() > 200 {
-                throughput_history.remove(0);
-            }
-            bytes_current_second = 0;
+            // throughput_history.push(bytes_current_second);
+            // if throughput_history.len() > 200 {
+            //     throughput_history.remove(0);
+            // }
+            // bytes_current_second = 0;
+            global_stats.update(rx_bytes_current_second, tx_bytes_current_second);
+            rx_bytes_current_second = 0;
+            tx_bytes_current_second = 0;
             last_tick = Instant::now();
         }
         // Data Filtering
@@ -204,17 +215,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Render
         terminal.draw(|f| {
+            let current_history: Vec<u64> = global_stats.graph.total_history.iter().cloned().collect();
             let chart_data = if is_paused {
                 &frozen_history
             } else {
-                &throughput_history
+                &current_history
             };
             ui::draw(
                 f,
                 active_tab,
                 &local_packets,
                 &connections,
-                &chart_data,
+                chart_data,
                 &is_paused,
                 &is_saving,
                 &filter_text,
@@ -223,6 +235,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &mut connections_list_state,
                 selected_spike_index,
                 pause_time,
+                &global_stats
             );
         })?;
 
@@ -238,7 +251,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Char(' ') => {
                             is_paused = !is_paused;
                             if is_paused {
-                                frozen_history = throughput_history.clone();
+                                frozen_history = global_stats.graph.total_history.iter().cloned().collect();
+                                frozen_rx = global_stats.graph.rx_history.iter().cloned().collect();
+                                frozen_tx = global_stats.graph.tx_history.iter().cloned().collect();
                                 selected_spike_index = Some(frozen_history.len().saturating_sub(1));
                                 pause_time = Some(Instant::now()); // Capture the "frozen" moment
                             } else {
@@ -303,7 +318,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         KeyCode::Right => {
                             if let Some(idx) = selected_spike_index {
-                                if idx < throughput_history.len() - 1 {
+                                if idx < global_stats.graph.total_history.len() - 1 {
                                     selected_spike_index = Some(idx + 1);
                                 }
                             }
