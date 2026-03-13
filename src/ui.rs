@@ -207,11 +207,11 @@ fn draw_connections_tab(
                 Span::styled(format!("{:<12}", p.app_name), Style::default().fg(Color::Green)),
                 // Fixed-width Country Badge in Yellow
                 Span::styled(
-                    format!(" {:<2} ", p.country_code), 
-                    Style::default().fg(Color::Yellow).bold()
-                ),
-                // Summary with a clean separator
-                Span::raw(format!(" │ {}", p.summary)).white(),
+
+                format!(" {} ", p.country_code), 
+                Style::default().fg(Color::Yellow).bold()
+            ),
+                Span::styled(format!("  |  {}",p.summary), Style::default().fg(Color::Cyan)),
             ]))
         })
         .collect();
