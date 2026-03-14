@@ -22,43 +22,43 @@ pub struct GraphData {
     pub rx_history: VecDeque<u64>,
     pub tx_history: VecDeque<u64>,
     pub total_history: VecDeque<u64>,
-    pub max_samples: usize
+    pub max_samples: usize,
 }
 impl GraphData {
-    pub fn new(size:usize) -> Self {
-        Self{
-            rx_history: VecDeque::from(vec![0;size]),
-            tx_history: VecDeque::from(vec![0;size]),
-            total_history: VecDeque::from(vec![0;size]),
-            max_samples:size,
+    pub fn new(size: usize) -> Self {
+        Self {
+            rx_history: VecDeque::from(vec![0; size]),
+            tx_history: VecDeque::from(vec![0; size]),
+            total_history: VecDeque::from(vec![0; size]),
+            max_samples: size,
         }
     }
-    pub fn update(&mut self,rx:u64,tx:u64) {
-       self.rx_history.push_back(rx);
-       self.tx_history.push_back(tx);
-       self.total_history.push_back(rx + tx);
+    pub fn update(&mut self, rx: u64, tx: u64) {
+        self.rx_history.push_back(rx);
+        self.tx_history.push_back(tx);
+        self.total_history.push_back(rx + tx);
 
-       if self.rx_history.len() > self.max_samples {
-           self.rx_history.pop_front();
-           self.tx_history.pop_front();
-           self.total_history.pop_front();
-       }
+        if self.rx_history.len() > self.max_samples {
+            self.rx_history.pop_front();
+            self.tx_history.pop_front();
+            self.total_history.pop_front();
+        }
     }
 }
 pub struct GlobalStats {
-    pub graph:GraphData,
-    pub total_rx:u64,
-    pub total_tx:u64
+    pub graph: GraphData,
+    pub total_rx: u64,
+    pub total_tx: u64,
 }
 impl GlobalStats {
-    pub fn new(size:usize) -> Self {
-        Self{
+    pub fn new(size: usize) -> Self {
+        Self {
             graph: GraphData::new(size),
-            total_tx : 0,
-            total_rx : 0,
+            total_tx: 0,
+            total_rx: 0,
         }
     }
-    pub fn update(&mut self,rx:u64,tx:u64) {
+    pub fn update(&mut self, rx: u64, tx: u64) {
         self.total_rx += rx;
         self.total_tx += tx;
 
@@ -66,9 +66,11 @@ impl GlobalStats {
     }
 }
 
-
-
-pub fn parse_packet_full(data: &[u8], app_name: String,geo_resolver:&GeoResolver) -> Option<PacketData> {
+pub fn parse_packet_full(
+    data: &[u8],
+    app_name: String,
+    geo_resolver: &GeoResolver,
+) -> Option<PacketData> {
     let value = SlicedPacket::from_ethernet(data).ok()?;
 
     let mut source = String::from("Unknown");
@@ -186,26 +188,26 @@ pub fn parse_packet_full(data: &[u8], app_name: String,geo_resolver:&GeoResolver
     let src = source.clone();
     let dst = dest.clone();
 
-let remote_ip = if is_local_ip(&src) { &dst } else { &src };
+    let remote_ip = if is_local_ip(&src) { &dst } else { &src };
 
-// Logic to strip port from IPv4 or IPv6
-let ip_only = if remote_ip.contains(']') {
-    // Case: [2001:db8::1]:443 -> 2001:db8::1
-    remote_ip
-        .trim_start_matches('[')
-        .split("]:")
-        .next()
-        .unwrap_or(remote_ip)
-} else if remote_ip.split(':').count() > 2 {
-    // Case: 2001:db8::1 (IPv6 without brackets/port)
-    remote_ip
-} else {
-    // Case: 1.2.3.4:80 -> 1.2.3.4
-    remote_ip.split(':').next().unwrap_or(remote_ip)
-};
+    // Logic to strip port from IPv4 or IPv6
+    let ip_only = if remote_ip.contains(']') {
+        // Case: [2001:db8::1]:443 -> 2001:db8::1
+        remote_ip
+            .trim_start_matches('[')
+            .split("]:")
+            .next()
+            .unwrap_or(remote_ip)
+    } else if remote_ip.split(':').count() > 2 {
+        // Case: 2001:db8::1 (IPv6 without brackets/port)
+        remote_ip
+    } else {
+        // Case: 1.2.3.4:80 -> 1.2.3.4
+        remote_ip.split(':').next().unwrap_or(remote_ip)
+    };
 
-let country = geo_resolver.resolve(&ip_only);
-details.push_str(&format!("country code: {}\n",country));
+    let country = geo_resolver.resolve(&ip_only);
+    details.push_str(&format!("country code: {}\n", country));
 
     Some(PacketData {
         timestamp: Instant::now(),
@@ -218,12 +220,15 @@ details.push_str(&format!("country code: {}\n",country));
         dest,
         proto_label,
         length,
-        country_code:country,
+        country_code: country,
     })
 }
 pub fn is_local_ip(ip: &str) -> bool {
-if ip.starts_with("127.") || ip.starts_with("192.168.") || 
-       ip.starts_with("10.") || ip.starts_with("172.") {
+    if ip.starts_with("127.")
+        || ip.starts_with("192.168.")
+        || ip.starts_with("10.")
+        || ip.starts_with("172.")
+    {
         return true;
     }
 
@@ -232,7 +237,9 @@ if ip.starts_with("127.") || ip.starts_with("192.168.") ||
     if ip_low.contains("::1") ||       // Loopback
        ip_low.starts_with("fe80:") ||  // Link-local
        ip_low.starts_with("fc00:") ||  // Unique local
-       ip_low.starts_with("fd00:") {   // Unique local
+       ip_low.starts_with("fd00:")
+    {
+        // Unique local
         return true;
     }
 

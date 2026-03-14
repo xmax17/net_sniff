@@ -1,10 +1,10 @@
 mod capture;
+mod geo;
 mod process;
 mod ui;
-mod geo;
 use crate::capture::{GlobalStats, GraphData, PacketData, is_local_ip, parse_packet_full};
-use crate::process::{ProcessResolver, run_ss_updater};
 use crate::geo::GeoResolver;
+use crate::process::{ProcessResolver, run_ss_updater};
 use chrono::Local;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -18,7 +18,6 @@ use std::sync::{Arc, Mutex, RwLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-
 #[derive(PartialEq, Debug)]
 pub enum InputMode {
     Normal,
@@ -30,7 +29,6 @@ pub enum Tab {
     Feed,
     Connections,
 }
-
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Device Selection
@@ -60,8 +58,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let save_file: Arc<Mutex<Option<pcap::Savefile>>> = Arc::new(Mutex::new(None));
 
     // App state
-    let mut active_tab = Tab::Feed;
-    let mut connections: HashMap<(String, String, String, String,String), u64> = HashMap::new();
+    let mut active_tab = Tab::Connections;
+    let mut connections: HashMap<(String, String, String, String, String), u64> = HashMap::new();
     let mut feed_list_state = ListState::default();
     let mut connections_list_state = ListState::default();
     let mut local_packets: Vec<PacketData> = Vec::new();
@@ -86,7 +84,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // FIX: Clone the device so the thread can own one copy while main() keeps the other
     let device_for_thread = selected_device.clone();
-    
+
     thread::spawn(move || {
         run_ss_updater(resolver_ss);
     });
@@ -109,7 +107,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     file.write(&packet);
                 }
             }
-
 
             let mut app_name = String::from("Unknown");
 
@@ -135,13 +132,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             app_name = res_guard.resolve(dst);
                         }
                         if app_name == "Unknown" && (src == 443 || dst == 443) {
-                           app_name = "HTTPS (Browser/Service)".to_string();
+                            app_name = "HTTPS (Browser/Service)".to_string();
                         }
                     }
                 }
             }
 
-            if let Some(parsed) = parse_packet_full(&packet.data, app_name,&geo_resolver) {
+            if let Some(parsed) = parse_packet_full(&packet.data, app_name, &geo_resolver) {
                 if parsed.proto_label == "SSDP"
                     || parsed.dest.contains("239.255.255.250")
                     || parsed.dest.contains("ff05::c")
@@ -169,7 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     packet.country_code.clone(),
                 );
                 *connections.entry(key).or_insert(0) += packet.length as u64;
-                if !is_local_ip(&packet.source){
+                if !is_local_ip(&packet.source) {
                     rx_bytes_current_second += packet.length as u64;
                 } else {
                     tx_bytes_current_second += packet.length as u64;
@@ -198,11 +195,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let filtered_packets: Vec<&PacketData> = local_packets
             .iter()
             .filter(|p| {
-             filter_text.is_empty()
-            || p.summary.to_lowercase().contains(&filter_text.to_lowercase())
-            || p.app_name.to_lowercase().contains(&filter_text.to_lowercase())
-            || p.source.to_lowercase().contains(&filter_text.to_lowercase())
-            || p.dest.to_lowercase().contains(&filter_text.to_lowercase())
+                filter_text.is_empty()
+                    || p.summary.contains(&filter_text)
+                    || p.app_name.contains(&filter_text)
+                    || p.source.contains(&filter_text)
+                    || p.dest.contains(&filter_text)
             })
             .collect();
 
@@ -215,18 +212,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Render
         terminal.draw(|f| {
-            let current_history: Vec<u64> = global_stats.graph.total_history.iter().cloned().collect();
+            let current_history: Vec<u64> =
+                global_stats.graph.total_history.iter().cloned().collect();
+            let current_rx: Vec<u64> = global_stats.graph.rx_history.iter().cloned().collect();
+            let current_tx: Vec<u64> = global_stats.graph.tx_history.iter().cloned().collect();
+
             let chart_data = if is_paused {
                 &frozen_history
             } else {
                 &current_history
             };
+            let rx_data = if is_paused { &frozen_rx } else { &current_rx };
+            let tx_data = if is_paused { &frozen_tx } else { &current_tx };
+
             ui::draw(
                 f,
                 active_tab,
                 &local_packets,
                 &connections,
                 chart_data,
+                rx_data,
+                tx_data,
                 &is_paused,
                 &is_saving,
                 &filter_text,
@@ -235,7 +241,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &mut connections_list_state,
                 selected_spike_index,
                 pause_time,
-                &global_stats
+                &global_stats,
             );
         })?;
 
@@ -245,13 +251,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match input_mode {
                     InputMode::Normal => match key.code {
                         KeyCode::Char('q') => break,
-                        KeyCode::Char('1') => active_tab = Tab::Feed,
-                        KeyCode::Char('2') => active_tab = Tab::Connections,
+                        KeyCode::Char('1') => active_tab = Tab::Connections,
+                        KeyCode::Char('2') => active_tab = Tab::Feed,
                         KeyCode::Char('/') => input_mode = InputMode::Search,
                         KeyCode::Char(' ') => {
                             is_paused = !is_paused;
                             if is_paused {
-                                frozen_history = global_stats.graph.total_history.iter().cloned().collect();
+                                frozen_history =
+                                    global_stats.graph.total_history.iter().cloned().collect();
                                 frozen_rx = global_stats.graph.rx_history.iter().cloned().collect();
                                 frozen_tx = global_stats.graph.tx_history.iter().cloned().collect();
                                 selected_spike_index = Some(frozen_history.len().saturating_sub(1));

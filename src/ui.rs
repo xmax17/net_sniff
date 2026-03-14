@@ -1,11 +1,13 @@
-use crate::capture::{PacketData,GlobalStats};
+use crate::capture::{GlobalStats, PacketData};
 use crate::{InputMode, Tab};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Style, Stylize,Modifier},
+    style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::{BarChart, Block, Borders, List, ListItem, ListState, Paragraph, Tabs, Wrap,Sparkline},
+    widgets::{
+        BarChart, Block, Borders, List, ListItem, ListState, Paragraph, Sparkline, Tabs, Wrap,
+    },
 };
 use std::collections::HashMap;
 use std::time::Instant;
@@ -24,8 +26,10 @@ pub fn draw(
     f: &mut Frame,
     active_tab: Tab,
     local_packets: &[PacketData],
-    connections: &HashMap<(String, String, String, String,String), u64>,
+    connections: &HashMap<(String, String, String, String, String), u64>,
     throughput_history: &[u64],
+    rx_history: &[u64],
+    tx_history: &[u64],
     paused: &bool,
     is_saving: &bool,
     filter: &str,
@@ -34,7 +38,7 @@ pub fn draw(
     connections_list_state: &mut ListState,
     selected_spike_idx: Option<usize>,
     pause_time: Option<Instant>,
-    global_stats: &GlobalStats
+    global_stats: &GlobalStats,
 ) {
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -47,7 +51,7 @@ pub fn draw(
         .split(f.area());
 
     // --- TABS ---
-    let titles = vec!["🌐 [1] CONNECTIONS "," 📡 [2] FEED "];
+    let titles = vec!["🌐 [1] CONNECTIONS ", " 📡 [2] FEED "];
     f.render_widget(
         Tabs::new(titles)
             .block(
@@ -64,23 +68,25 @@ pub fn draw(
         Tab::Connections => draw_connections_tab(
             f,
             main_chunks[1],
+            connections,
+            rx_history,
+            tx_history,
+            throughput_history,
+            filter,
+            connections_list_state,
+            selected_spike_idx,
+            &global_stats,
+        ),
+        Tab::Feed => draw_feed_tab(
+            f,
+            main_chunks[1],
             local_packets,
             filter,
             feed_list_state,
             selected_spike_idx,
             throughput_history,
             pause_time,
-            global_stats
-        ),
-        Tab::Feed => draw_feed_tab(
-            f,
-            main_chunks[1],
-            connections,
-            throughput_history,
-            filter,
-            connections_list_state,
-            selected_spike_idx,
-            &global_stats
+            global_stats,
         ),
     }
     let filter_style = if *mode == InputMode::Search {
@@ -96,13 +102,12 @@ pub fn draw(
     };
 
     f.render_widget(
-        Paragraph::new(filter_display)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(filter_style)
-                    .title(Span::styled(" 🔍 FILTER ", filter_style)),
-            ),
+        Paragraph::new(filter_display).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(filter_style)
+                .title(Span::styled(" 🔍 FILTER ", filter_style)),
+        ),
         main_chunks[2],
     );
 
@@ -127,11 +132,22 @@ pub fn draw(
             " INSPECTOR MODE ",
             Style::default().bg(Color::Yellow).fg(Color::Black).bold(),
         ));
+    } else if *is_saving {
+        status_line.push(Span::styled(
+            " RECORDING ",
+            Style::default().bg(Color::Red).fg(Color::Black).bold(),
+        ))
     } else {
         status_line.push(if *paused {
-            " PAUSED ".on_red().white().bold()
+            Span::styled(
+                " PAUSED ",
+                Style::default().bg(Color::Black).fg(Color::White).bold(),
+            )
         } else {
-            " LIVE ".on_green().white().bold()
+            Span::styled(
+                " LIVE ",
+                Style::default().bg(Color::Cyan).fg(Color::White).bold(),
+            )
         });
     }
 
@@ -157,7 +173,7 @@ pub fn draw(
     );
 }
 
-fn draw_connections_tab(
+fn draw_feed_tab(
     f: &mut Frame,
     area: Rect,
     packets: &[PacketData],
@@ -191,9 +207,9 @@ fn draw_connections_tab(
                     false
                 }
             } else {
-                filter.is_empty() 
-                || p.summary.to_lowercase().contains(&filter_low) 
-                || p.app_name.to_lowercase().contains(&filter_low) 
+                filter.is_empty()
+                    || p.summary.to_lowercase().contains(&filter_low)
+                    || p.app_name.to_lowercase().contains(&filter_low)
             }
         })
         .collect();
@@ -204,14 +220,19 @@ fn draw_connections_tab(
         .map(|p| {
             ListItem::new(Line::from(vec![
                 // App Name in Green
-                Span::styled(format!("{:<12}", p.app_name), Style::default().fg(Color::Green)),
+                Span::styled(
+                    format!("{:<12}", p.app_name),
+                    Style::default().fg(Color::Green),
+                ),
                 // Fixed-width Country Badge in Yellow
                 Span::styled(
-
-                format!(" {} ", p.country_code), 
-                Style::default().fg(Color::Yellow).bold()
-            ),
-                Span::styled(format!("  |  {}",p.summary), Style::default().fg(Color::Cyan)),
+                    format!(" {} ", p.country_code),
+                    Style::default().fg(Color::Yellow).bold(),
+                ),
+                Span::styled(
+                    format!("  |  {}", p.summary),
+                    Style::default().fg(Color::Cyan),
+                ),
             ]))
         })
         .collect();
@@ -222,7 +243,7 @@ fn draw_connections_tab(
                 Block::default()
                     .title(" 📡 LIVE PACKET STREAM ")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Green))
+                    .border_style(Style::default().fg(Color::Green)),
             )
             .highlight_style(Style::default().bg(Color::Rgb(40, 40, 40)).bold()),
         chunks[0],
@@ -230,27 +251,28 @@ fn draw_connections_tab(
     );
 
     // --- RIGHT: DYNAMIC INSPECTOR ---
-    
+
     // 1. If a packet is selected: Show Hex/Details
     if let Some(p_idx) = list_state.selected() {
         if let Some(packet) = filtered.get(p_idx) {
             let display_text = format!(
-                "{}\n\n--- RAW PAYLOAD (HEX) ---\n{}", 
-                packet.full_details, 
-                packet.hex_dump
+                "{}\n\n--- RAW PAYLOAD (HEX) ---\n{}",
+                packet.full_details, packet.hex_dump
             );
 
             f.render_widget(
                 Paragraph::new(display_text)
-                    .block(Block::default()
-                        .title(" 🔍 PACKET INSPECTOR ")
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Yellow)))
+                    .block(
+                        Block::default()
+                            .title(" 🔍 PACKET INSPECTOR ")
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(Color::Yellow)),
+                    )
                     .wrap(Wrap { trim: false }),
                 chunks[1],
             );
         }
-    } 
+    }
     // 2. If scrubbing through a spike: Show Spike Analysis
     else if let Some(s_idx) = spike_idx {
         let mut app_counts = std::collections::HashMap::new();
@@ -282,14 +304,20 @@ fn draw_connections_tab(
 
         f.render_widget(
             Paragraph::new(info)
-                .block(Block::default()
-                    .title(" SPIKE SUMMARY ")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)))
+                .block(
+                    Block::default()
+                        .title(" SPIKE SUMMARY ")
+                        .borders(Borders::ALL)
+                        .border_style(
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                )
                 .wrap(Wrap { trim: false }),
             chunks[1],
         );
-    } 
+    }
     // 3. Default state: Show Session Totals (Matches Graph Style)
     else {
         let stats_summary = format!(
@@ -297,10 +325,7 @@ fn draw_connections_tab(
                ▼ DOWNLOADED:   {}\n\
                ▲ UPLOADED:     {}\n\n\
                Captured:      {} packets\n\n\n\
-               --- ⌨️  QUICK CONTROLS ---\n\
-               [f] Filter List\n\
-               [p] Pause & Scrub Timeline\n\
-               [Tab] Switch to Graphs",
+",
             format_bytes(global_stats.total_rx),
             format_bytes(global_stats.total_tx),
             packets.len()
@@ -308,102 +333,91 @@ fn draw_connections_tab(
 
         f.render_widget(
             Paragraph::new(stats_summary)
-                .block(Block::default()
-                    .title(" 📈 GLOBAL STATS ")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan)))
+                .block(
+                    Block::default()
+                        .title(" 📈 GLOBAL STATS ")
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Cyan)),
+                )
                 .wrap(Wrap { trim: false }),
             chunks[1],
         );
     }
 }
 
-fn draw_feed_tab(
+fn draw_connections_tab(
     f: &mut Frame,
     area: Rect,
-    connections: &HashMap<(String, String, String, String,String), u64>,
+    connections: &HashMap<(String, String, String, String, String), u64>,
+    rx_history: &[u64],
+    tx_history: &[u64],
     throughput: &[u64],
     filter: &str,
     list_state: &mut ListState,
     selected_idx: Option<usize>,
     global_stats: &GlobalStats,
 ) {
-// 1. Split top (Graphs) from bottom (Sessions)
-let chunks = Layout::default()
+    let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(24), Constraint::Min(0)]) // Increased height slightly for 3 stacked rows
+        .constraints([Constraint::Length(15), Constraint::Min(0)]) // 15 is usually enough for 3 sparklines
         .split(area);
 
-    // 2. Split the top area: Left (Main BarChart) | Right (Stacked Sparklines)
     let graph_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+        ])
         .split(chunks[0]);
 
-    // --- MAIN BARCHART (Total) ---
-    // (Keep your existing BarChart logic here...)
-// --- MAIN SPARKLINE (Total) ---
-let total_vals: Vec<u64> = throughput.iter().copied().collect();
-let total_max = *total_vals.iter().max().unwrap_or(&100);
+    // 1. TOTAL THROUGHPUT
+    let total_max = *throughput.iter().max().unwrap_or(&100);
+    f.render_widget(
+        Sparkline::default()
+            .block(
+                Block::default()
+                    .title(format!(" 📊 TOTAL (Peak: {}) ", format_bytes(total_max)))
+                    .borders(Borders::ALL)
+                    .cyan(),
+            )
+            .data(throughput)
+            .max(total_max)
+            .style(Style::default().fg(Color::Cyan)),
+        graph_chunks[0],
+    );
 
-f.render_widget(
-    Sparkline::default()
-        .block(
-            Block::default()
-                .title(format!(" 📊 TOTAL THROUGHPUT (Peak: {}) ", format_bytes(total_max)))
-                .borders(Borders::ALL)
-                .cyan(),
-        )
-        .data(&total_vals)
-        .max(total_max)
-        .style(Style::default().fg(Color::Cyan)),
-    graph_chunks[0],
-);
+    // 2. RX SPARKLINE
+    let rx_max = *rx_history.iter().max().unwrap_or(&100);
+    f.render_widget(
+        Sparkline::default()
+            .block(
+                Block::default()
+                    .title(format!(" ▼ RX ({}) ", format_bytes(rx_max)))
+                    .borders(Borders::ALL)
+                    .green(),
+            )
+            .data(rx_history) // Use the slice passed as argument
+            .max(rx_max)
+            .style(Style::default().fg(Color::Green)),
+        graph_chunks[1],
+    );
 
-// --- STACKED RX & TX SIDEBAR ---
-let side_chunks = Layout::default()
-    .direction(Direction::Vertical)
-    .constraints([
-        Constraint::Percentage(50), 
-        Constraint::Percentage(50)
-    ])
-    .split(graph_chunks[1]);
-
-// RX Sparkline
-let rx_vals: Vec<u64> = global_stats.graph.rx_history.iter().copied().collect();
-let rx_max = *rx_vals.iter().max().unwrap_or(&100);
-
-f.render_widget(
-    Sparkline::default()
-        .block(
-            Block::default()
-                .title(format!(" ▼ RX ({}) ", format_bytes(rx_max)))
-                .borders(Borders::ALL)
-                .green(),
-        )
-        .data(&rx_vals)
-        .max(rx_max)
-        .style(Style::default().fg(Color::Green)),
-    side_chunks[0],
-);
-
-// TX Sparkline
-let tx_vals: Vec<u64> = global_stats.graph.tx_history.iter().copied().collect();
-let tx_max = *tx_vals.iter().max().unwrap_or(&100);
-
-f.render_widget(
-    Sparkline::default()
-        .block(
-            Block::default()
-                .title(format!(" ▲ TX ({}) ", format_bytes(tx_max)))
-                .borders(Borders::ALL)
-                .magenta(),
-        )
-        .data(&tx_vals)
-        .max(tx_max)
-        .style(Style::default().fg(Color::Magenta)),
-    side_chunks[1],
-);
+    // 3. TX SPARKLINE
+    let tx_max = *tx_history.iter().max().unwrap_or(&100);
+    f.render_widget(
+        Sparkline::default()
+            .block(
+                Block::default()
+                    .title(format!(" ▲ TX ({}) ", format_bytes(tx_max)))
+                    .borders(Borders::ALL)
+                    .magenta(),
+            )
+            .data(tx_history) // Use the slice passed as argument
+            .max(tx_max)
+            .style(Style::default().fg(Color::Magenta)),
+        graph_chunks[2],
+    );
 
     // --- BOTTOM SECTION (SESSIONS) ---
     let bottom_chunks = Layout::default()
@@ -426,9 +440,12 @@ f.render_widget(
     let items: Vec<ListItem> = filtered_conns
         .iter()
         .map(|(key, bytes)| {
-            let (_src, _dst, proto, app,country) = key;
+            let (_src, _dst, proto, app, country) = key;
             ListItem::new(Line::from(vec![
-                Span::styled(format!("{:<10} | {}" , app,country), Style::default().fg(Color::Green)),
+                Span::styled(
+                    format!("{:<10} | {}", app, country),
+                    Style::default().fg(Color::Green),
+                ),
                 format!(" │ {} │ ", proto).into(),
                 Span::styled(format_bytes(**bytes), Style::default().fg(Color::Cyan)),
             ]))
@@ -450,7 +467,7 @@ f.render_widget(
 
     if let Some(idx) = list_state.selected() {
         if let Some((key, bytes)) = filtered_conns.get(idx) {
-            let (src, dst, proto, app,country) = key;
+            let (src, dst, proto, app, country) = key;
             let info = format!(
                 "Application: {}\nCountry code: {}\nProtocol:    {}\nSource:      {}\nDestination: {}\nTotal Data:  {}",
                 app,
