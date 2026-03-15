@@ -173,7 +173,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 local_packets.push(packet);
                 received_new = true;
-                if local_packets.len() > 1000 {
+                if local_packets.len() > 8000 {
                     local_packets.remove(0);
                 }
             }

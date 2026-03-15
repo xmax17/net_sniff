@@ -195,22 +195,23 @@ fn draw_feed_tab(
     let filtered: Vec<&PacketData> = packets
         .iter()
         .filter(|p| {
-            if let Some(idx) = spike_idx {
-                if let Some(ref_time) = pause_time {
-                    let seconds_before_pause = (history.len().saturating_sub(1 + idx)) as u64;
-                    if p.timestamp > ref_time {
-                        return false;
-                    }
-                    let packet_age_at_pause = ref_time.duration_since(p.timestamp).as_secs();
-                    packet_age_at_pause == seconds_before_pause
-                } else {
-                    false
-                }
-            } else {
-                filter.is_empty()
-                    || p.summary.to_lowercase().contains(&filter_low)
-                    || p.app_name.to_lowercase().contains(&filter_low)
+            let matches_text = filter.is_empty() 
+                || p.summary.to_lowercase().contains(&filter_low)
+                || p.app_name.to_lowercase().contains(&filter_low);
+            if !filter.is_empty(){
+                return matches_text;
             }
+            if let Some(idx) = spike_idx {
+            if let Some(ref_time) = pause_time {
+                let seconds_before_pause = (history.len().saturating_sub(1 + idx)) as u64;
+                if p.timestamp > ref_time { return false; }
+                let packet_age_at_pause = ref_time.duration_since(p.timestamp).as_secs();
+                return packet_age_at_pause == seconds_before_pause;
+            }
+        }
+        
+        // Default: Show everything (Live view)
+        true
         })
         .collect();
 
