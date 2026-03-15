@@ -333,10 +333,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         _ => {}
                     },
                     InputMode::Search => match key.code {
-                        KeyCode::Enter | KeyCode::Esc => input_mode = InputMode::Normal,
+                        KeyCode::Enter => input_mode = InputMode::Normal,
                         KeyCode::Char(c) => filter_text.push(c),
                         KeyCode::Backspace => {
                             filter_text.pop();
+                        }
+                        KeyCode::Esc => {
+                            filter_text.clear();
+                            input_mode = InputMode::Normal
                         }
                         _ => {}
                     },

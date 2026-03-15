@@ -158,6 +158,9 @@ pub fn draw(
         if *paused {
             hints.push("[←/→] Scrub Spike");
         }
+        if active_tab == Tab::Feed {
+            hints.push("[c] Clear");
+        }
     }
 
     f.render_widget(
