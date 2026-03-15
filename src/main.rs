@@ -2,6 +2,7 @@ mod capture;
 mod geo;
 mod process;
 mod ui;
+mod theme;
 use crate::capture::{GlobalStats, GraphData, PacketData, is_local_ip, parse_packet_full};
 use crate::geo::GeoResolver;
 use crate::process::{ProcessResolver, run_ss_updater};

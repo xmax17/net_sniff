@@ -1,12 +1,13 @@
 use crate::capture::{GlobalStats, PacketData};
 use crate::{InputMode, Tab};
+use crate::theme::Theme; 
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
-        BarChart, Block, Borders, List, ListItem, ListState, Paragraph, Sparkline, Tabs, Wrap,
+        Block, Borders, List, ListItem, ListState, Paragraph, Sparkline, Tabs, Wrap,
     },
 };
 use std::collections::HashMap;
@@ -57,10 +58,11 @@ pub fn draw(
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" NET-SNIFF-RS "),
+                    .title(" NET-SNIFF-RS ")
+                    .border_style(Theme::get("border_inactive")),
             )
             .select(active_tab as usize)
-            .highlight_style(Style::default().fg(Color::Yellow).bold()),
+            .highlight_style(Theme::get("tab_selected")),
         main_chunks[0],
     );
 
@@ -89,10 +91,12 @@ pub fn draw(
             global_stats,
         ),
     }
+
+    // --- FILTER BOX LOGIC ---
     let filter_style = if *mode == InputMode::Search {
-        Style::default().fg(Color::Yellow).bold() // Highlight when typing
+        Theme::get("search_typing")
     } else {
-        Style::default().fg(Color::DarkGray) // Dim when just viewing
+        Theme::get("search_idle")
     };
 
     let filter_display = if filter.is_empty() && *mode != InputMode::Search {
@@ -115,39 +119,24 @@ pub fn draw(
     let mut status_line = vec![
         Span::styled(
             format!(" {:?} ", mode),
-            Style::default()
-                .bg(if *mode == InputMode::Normal {
-                    Color::Blue
-                } else {
-                    Color::Magenta
-                })
-                .fg(Color::Black)
-                .bold(),
+            if *mode == InputMode::Normal {
+                Theme::get("status_mode_normal")
+            } else {
+                Theme::get("status_mode_search")
+            }
         ),
         " ".into(),
     ];
 
     if let Some(_idx) = selected_spike_idx {
-        status_line.push(Span::styled(
-            " INSPECTOR MODE ",
-            Style::default().bg(Color::Yellow).fg(Color::Black).bold(),
-        ));
+        status_line.push(Span::styled(" INSPECTOR MODE ", Theme::get("status_inspector")));
     } else if *is_saving {
-        status_line.push(Span::styled(
-            " RECORDING ",
-            Style::default().bg(Color::Red).fg(Color::Black).bold(),
-        ))
+        status_line.push(Span::styled(" RECORDING ", Theme::get("status_recording")));
     } else {
         status_line.push(if *paused {
-            Span::styled(
-                " PAUSED ",
-                Style::default().bg(Color::Black).fg(Color::White).bold(),
-            )
+            Span::styled(" PAUSED ", Theme::get("status_paused"))
         } else {
-            Span::styled(
-                " LIVE ",
-                Style::default().bg(Color::Cyan).fg(Color::White).bold(),
-            )
+            Span::styled(" LIVE ", Theme::get("status_live"))
         });
     }
 
@@ -165,11 +154,12 @@ pub fn draw(
 
     f.render_widget(
         Paragraph::new(Line::from(status_line)).block(
-            Block::default().borders(Borders::ALL).title_bottom(
+            Block::default().borders(Borders::ALL)
+                .border_style(Theme::get("border_inactive"))
+                .title_bottom(
                 Line::from(format!(" {} ", hints.join(" | ")))
                     .centered()
-                    .dark_gray()
-                    .italic(),
+                    .style(Theme::get("dim")),
             ),
         ),
         main_chunks[3],
@@ -185,7 +175,7 @@ fn draw_feed_tab(
     spike_idx: Option<usize>,
     history: &[u64],
     pause_time: Option<Instant>,
-    global_stats: &GlobalStats, // Added to match the graph's data source
+    global_stats: &GlobalStats,
 ) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -194,7 +184,6 @@ fn draw_feed_tab(
 
     let filter_low = filter.to_lowercase();
 
-    // --- FILTERING LOGIC ---
     let filtered: Vec<&PacketData> = packets
         .iter()
         .filter(|p| {
@@ -205,38 +194,24 @@ fn draw_feed_tab(
                 return matches_text;
             }
             if let Some(idx) = spike_idx {
-            if let Some(ref_time) = pause_time {
-                let seconds_before_pause = (history.len().saturating_sub(1 + idx)) as u64;
-                if p.timestamp > ref_time { return false; }
-                let packet_age_at_pause = ref_time.duration_since(p.timestamp).as_secs();
-                return packet_age_at_pause == seconds_before_pause;
+                if let Some(ref_time) = pause_time {
+                    let seconds_before_pause = (history.len().saturating_sub(1 + idx)) as u64;
+                    if p.timestamp > ref_time { return false; }
+                    let packet_age_at_pause = ref_time.duration_since(p.timestamp).as_secs();
+                    return packet_age_at_pause == seconds_before_pause;
+                }
             }
-        }
-        
-        // Default: Show everything (Live view)
-        true
+            true
         })
         .collect();
 
-    // --- LEFT: PACKET STREAM RENDERING ---
     let items: Vec<ListItem> = filtered
         .iter()
         .map(|p| {
             ListItem::new(Line::from(vec![
-                // App Name in Green
-                Span::styled(
-                    format!("{:<12}", p.app_name),
-                    Style::default().fg(Color::Green),
-                ),
-                // Fixed-width Country Badge in Yellow
-                Span::styled(
-                    format!(" {} ", p.country_code),
-                    Style::default().fg(Color::Yellow).bold(),
-                ),
-                Span::styled(
-                    format!("  |  {}", p.summary),
-                    Style::default().fg(Color::Cyan),
-                ),
+                Span::styled(format!("{:<12}", p.app_name), Theme::get("app_name")),
+                Span::styled(format!(" {} ", p.country_code), Theme::get("country")),
+                Span::styled(format!("  |  {}", p.summary), Theme::get("payload")),
             ]))
         })
         .collect();
@@ -247,38 +222,32 @@ fn draw_feed_tab(
                 Block::default()
                     .title(" 📡 LIVE PACKET STREAM ")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Green)),
+                    .border_style(Theme::get("border_active")),
             )
-            .highlight_style(Style::default().bg(Color::Rgb(40, 40, 40)).bold()),
+            .highlight_style(Theme::get("highlight")),
         chunks[0],
         list_state,
     );
 
-    // --- RIGHT: DYNAMIC INSPECTOR ---
-
-    // 1. If a packet is selected: Show Hex/Details
     if let Some(p_idx) = list_state.selected() {
         if let Some(packet) = filtered.get(p_idx) {
             let display_text = format!(
                 "{}\n\n--- RAW PAYLOAD (HEX) ---\n{}",
                 packet.full_details, packet.hex_dump
             );
-
             f.render_widget(
                 Paragraph::new(display_text)
                     .block(
                         Block::default()
                             .title(" 🔍 PACKET INSPECTOR ")
                             .borders(Borders::ALL)
-                            .border_style(Style::default().fg(Color::Yellow)),
+                            .border_style(Theme::get("border_focus")),
                     )
                     .wrap(Wrap { trim: false }),
                 chunks[1],
             );
         }
-    }
-    // 2. If scrubbing through a spike: Show Spike Analysis
-    else if let Some(s_idx) = spike_idx {
+    } else if let Some(s_idx) = spike_idx {
         let mut app_counts = std::collections::HashMap::new();
         for p in &filtered {
             *app_counts.entry(&p.app_name).or_insert(0) += 1;
@@ -301,7 +270,7 @@ fn draw_feed_tab(
               [↑/↓] Browse specific packets\n\
               [←/→] Shift time window",
             history.len().saturating_sub(1 + s_idx),
-            format_bytes(val), // Use your specific formatter
+            format_bytes(val),
             filtered.len(),
             top_app
         );
@@ -312,24 +281,17 @@ fn draw_feed_tab(
                     Block::default()
                         .title(" SPIKE SUMMARY ")
                         .borders(Borders::ALL)
-                        .border_style(
-                            Style::default()
-                                .fg(Color::Cyan)
-                                .add_modifier(Modifier::BOLD),
-                        ),
+                        .border_style(Theme::get("total").add_modifier(Modifier::BOLD)),
                 )
                 .wrap(Wrap { trim: false }),
             chunks[1],
         );
-    }
-    // 3. Default state: Show Session Totals (Matches Graph Style)
-    else {
+    } else {
         let stats_summary = format!(
-            "\n\n   --- 📊 SESSION TRAFFIC ---\n\n\n\
-               ▼ DOWNLOADED:   {}\n\
-               ▲ UPLOADED:     {}\n\n\
-               Captured:      {} packets\n\n\n\
-",
+            "\n\n    --- 📊 SESSION TRAFFIC ---\n\n\n\
+                ▼ DOWNLOADED:   {}\n\
+                ▲ UPLOADED:     {}\n\n\
+                Captured:      {} packets\n\n\n",
             format_bytes(global_stats.total_rx),
             format_bytes(global_stats.total_tx),
             packets.len()
@@ -341,7 +303,7 @@ fn draw_feed_tab(
                     Block::default()
                         .title(" 📈 GLOBAL STATS ")
                         .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Cyan)),
+                        .border_style(Theme::get("total")),
                 )
                 .wrap(Wrap { trim: false }),
             chunks[1],
@@ -363,7 +325,7 @@ fn draw_connections_tab(
 ) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(15), Constraint::Min(0)]) // 15 is usually enough for 3 sparklines
+        .constraints([Constraint::Length(15), Constraint::Min(0)])
         .split(area);
 
     let graph_chunks = Layout::default()
@@ -383,11 +345,11 @@ fn draw_connections_tab(
                 Block::default()
                     .title(format!(" 📊 TOTAL (Peak: {}) ", format_bytes(total_max)))
                     .borders(Borders::ALL)
-                    .cyan(),
+                    .border_style(Theme::get("total")),
             )
             .data(throughput)
             .max(total_max)
-            .style(Style::default().fg(Color::Cyan)),
+            .style(Theme::get("total")),
         graph_chunks[0],
     );
 
@@ -399,11 +361,11 @@ fn draw_connections_tab(
                 Block::default()
                     .title(format!(" ▼ RX ({}) ", format_bytes(rx_max)))
                     .borders(Borders::ALL)
-                    .green(),
+                    .border_style(Theme::get("rx")),
             )
-            .data(rx_history) // Use the slice passed as argument
+            .data(rx_history)
             .max(rx_max)
-            .style(Style::default().fg(Color::Green)),
+            .style(Theme::get("rx")),
         graph_chunks[1],
     );
 
@@ -415,11 +377,11 @@ fn draw_connections_tab(
                 Block::default()
                     .title(format!(" ▲ TX ({}) ", format_bytes(tx_max)))
                     .borders(Borders::ALL)
-                    .magenta(),
+                    .border_style(Theme::get("tx")),
             )
-            .data(tx_history) // Use the slice passed as argument
+            .data(tx_history)
             .max(tx_max)
-            .style(Style::default().fg(Color::Magenta)),
+            .style(Theme::get("tx")),
         graph_chunks[2],
     );
 
@@ -448,10 +410,10 @@ fn draw_connections_tab(
             ListItem::new(Line::from(vec![
                 Span::styled(
                     format!("{:<10} | {}", app, country),
-                    Style::default().fg(Color::Green),
+                    Theme::get("app_name"),
                 ),
                 format!(" │ {} │ ", proto).into(),
-                Span::styled(format_bytes(**bytes), Style::default().fg(Color::Cyan)),
+                Span::styled(format_bytes(**bytes), Theme::get("total")),
             ]))
         })
         .collect();
@@ -462,9 +424,9 @@ fn draw_connections_tab(
                 Block::default()
                     .title(" SESSIONS ")
                     .borders(Borders::ALL)
-                    .cyan(),
+                    .border_style(Theme::get("total")),
             )
-            .highlight_style(Style::default().bg(Color::Rgb(40, 40, 40))),
+            .highlight_style(Theme::get("highlight")),
         bottom_chunks[0],
         list_state,
     );
@@ -474,12 +436,7 @@ fn draw_connections_tab(
             let (src, dst, proto, app, country) = key;
             let info = format!(
                 "Application: {}\nCountry code: {}\nProtocol:    {}\nSource:      {}\nDestination: {}\nTotal Data:  {}",
-                app,
-                country,
-                proto,
-                src,
-                dst,
-                format_bytes(**bytes),
+                app, country, proto, src, dst, format_bytes(**bytes),
             );
             f.render_widget(
                 Paragraph::new(info)
@@ -487,7 +444,7 @@ fn draw_connections_tab(
                         Block::default()
                             .title(" SESSION DETAIL ")
                             .borders(Borders::ALL)
-                            .yellow(),
+                            .border_style(Theme::get("border_focus")),
                     )
                     .wrap(Wrap { trim: false }),
                 bottom_chunks[1],
@@ -505,7 +462,7 @@ fn draw_connections_tab(
                 Block::default()
                     .title(" SPIKE INFO ")
                     .borders(Borders::ALL)
-                    .cyan(),
+                    .border_style(Theme::get("total")),
             ),
             bottom_chunks[1],
         );
