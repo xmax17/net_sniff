@@ -1,5 +1,5 @@
 use crate::capture::{GlobalStats, PacketData};
-use crate::{InputMode, Tab};
+use crate::{App, InputMode, Tab};
 use crate::theme::Theme; 
 use ratatui::{
     Frame,
@@ -7,12 +7,12 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
-        Block, Borders, List, ListItem, ListState, Paragraph, Sparkline, Tabs, Wrap,
+        Block, Borders, List, ListItem, ListState, Paragraph, Sparkline, Tabs, Wrap,Clear,Row,Table
     },
 };
 use std::collections::HashMap;
 use std::time::Instant;
-
+use crate::ui_utils::centered_rect;
 fn format_bytes(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{} B", bytes)
@@ -31,8 +31,7 @@ pub fn draw(
     throughput_history: &[u64],
     rx_history: &[u64],
     tx_history: &[u64],
-    paused: &bool,
-    is_saving: &bool,
+    app:&App,
     filter: &str,
     mode: &InputMode,
     feed_list_state: &mut ListState,
@@ -130,10 +129,10 @@ pub fn draw(
 
     if let Some(_idx) = selected_spike_idx {
         status_line.push(Span::styled(" INSPECTOR MODE ", Theme::get("status_inspector")));
-    } else if *is_saving {
+    } else if app.is_saving {
         status_line.push(Span::styled(" RECORDING ", Theme::get("status_recording")));
     } else {
-        status_line.push(if *paused {
+        status_line.push(if app.is_paused {
             Span::styled(" PAUSED ", Theme::get("status_paused"))
         } else {
             Span::styled(" LIVE ", Theme::get("status_live"))
@@ -144,7 +143,7 @@ pub fn draw(
     if *mode == InputMode::Normal {
         hints.push("[/] Search");
         hints.push("[Space] Pause");
-        if *paused {
+        if app.is_paused {
             hints.push("[←/→] Scrub Spike");
         }
         if active_tab == Tab::Feed {
@@ -164,6 +163,12 @@ pub fn draw(
         ),
         main_chunks[3],
     );
+    if app.show_shortcuts {
+        draw_help_popup(f);
+    }
+    if app.show_theme{
+        draw_theme_popup(f, app.theme_index);
+    }
 }
 
 fn draw_feed_tab(
@@ -467,4 +472,85 @@ fn draw_connections_tab(
             bottom_chunks[1],
         );
     }
+}
+pub fn draw_help_popup(f: &mut Frame) {
+    // 70% wide and 60% high is usually the "sweet spot" for text lists
+    let area = centered_rect(70, 60, f.area());
+    f.render_widget(Clear, area);
+
+    // Style for the keys (Yellow/Bold) and descriptions (Dim/Italic)
+    let key_style = Theme::get("border_focus").add_modifier(Modifier::BOLD);
+    let desc_style = Theme::get("dim");
+
+    let rows = vec![
+        // --- NAVIGATION ---
+        Row::new(vec![" NAVIGATION", ""]).style(Theme::get("total").add_modifier(Modifier::BOLD)),
+        Row::new(vec!["  [1 / 2]", "Switch Tabs (Connections / Feed)"]).style(desc_style),
+        Row::new(vec!["  [j / k] or [↑ / ↓]", "Scroll List Items"]).style(desc_style),
+        Row::new(vec!["  [← / →]", "Scrub spikes (When Paused)"]).style(desc_style),
+        
+        // --- SEARCH & FILTER ---
+        Row::new(vec!["", ""]), // Spacer
+        Row::new(vec![" SEARCH & FILTER", ""]).style(Theme::get("rx").add_modifier(Modifier::BOLD)),
+        Row::new(vec!["  [/]", "Enter Search Mode"]).style(desc_style),
+        Row::new(vec!["  [Enter]", "Confirm / Exit Search"]).style(desc_style),
+        Row::new(vec!["  [ESC]", "Clear Filter & Exit Search"]).style(desc_style),
+
+        // --- CONTROLS ---
+        Row::new(vec!["", ""]), // Spacer
+        Row::new(vec![" SYSTEM & CAPTURE", ""]).style(Theme::get("tx").add_modifier(Modifier::BOLD)),
+        Row::new(vec!["  [Space]", "Pause / Resume Live Feed"]).style(desc_style),
+        Row::new(vec!["  [w]", "Toggle PCAP Recording (Auto-Timestamp)"]).style(desc_style),
+        Row::new(vec!["  [c]", "Clear Current Buffer"]).style(desc_style),
+        Row::new(vec!["  [t]", "Toggle Theme Selector"]).style(desc_style),
+        Row::new(vec!["  [h]", "Close this Help Menu"]).style(desc_style),
+        Row::new(vec!["  [q]", "Quit Application"]).style(desc_style),
+    ];
+
+    let table = Table::new(rows, [Constraint::Length(22), Constraint::Min(20)])
+        .block(
+            Block::default()
+                .title(" ⌨️ KEYBOARD SHORTCUTS ")
+                .borders(Borders::ALL)
+                .border_style(Theme::get("border_focus")),
+        )
+        .header(Row::new(vec!["  KEY", "ACTION"]).style(key_style).bottom_margin(1));
+
+    f.render_widget(table, area);
+}
+pub fn draw_theme_popup(f: &mut Frame, selected_index: usize) {
+    let area = centered_rect(30, 50, f.area());
+    f.render_widget(Clear, area);
+
+    // Get the dynamic list from the folder
+    let available_themes = Theme::list_themes();
+    
+    let items: Vec<ListItem> = if available_themes.is_empty() {
+        vec![ListItem::new(" No themes found in ./themes ").style(Theme::get("dim"))]
+    } else {
+        available_themes
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let style = if i == selected_index {
+                    Theme::get("highlight")
+                } else {
+                    Theme::get("dim")
+                };
+                // Capitalize first letter for the UI
+                let display_name = format!("  {}  ", name.to_uppercase());
+                ListItem::new(display_name).style(style)
+            })
+            .collect()
+    };
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .title(" 🎨 THEME BROWSER ")
+                .borders(Borders::ALL)
+                .border_style(Theme::get("border_focus")),
+        );
+
+    f.render_widget(list, area);
 }

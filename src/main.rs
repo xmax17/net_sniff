@@ -2,10 +2,12 @@ mod capture;
 mod geo;
 mod process;
 mod ui;
+mod ui_utils;
 mod theme;
 use crate::capture::{GlobalStats, GraphData, PacketData, is_local_ip, parse_packet_full};
 use crate::geo::GeoResolver;
 use crate::process::{ProcessResolver, run_ss_updater};
+use crate::theme::Theme;
 use chrono::Local;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -31,6 +33,17 @@ pub enum Tab {
     Connections,
 }
 
+#[derive(Default)]
+pub struct App{
+    pub is_paused:bool,
+    pub is_saving:bool,
+    pub show_shortcuts:bool,
+    pub show_theme:bool,
+    pub theme_index:usize
+}
+
+
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Device Selection
     let devices = pcap::Device::list()?;
@@ -51,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
-
+    Theme::init();
     // 3. Shared State & Channels
     let (tx, rx) = mpsc::channel::<PacketData>();
     let resolver = Arc::new(RwLock::new(ProcessResolver::new()));
@@ -66,8 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut local_packets: Vec<PacketData> = Vec::new();
     let mut input_mode = InputMode::Normal;
     let mut filter_text = String::new();
-    let mut is_paused = false;
-    let mut is_saving = false;
+    let mut app = App::default();
     let mut selected_spike_index: Option<usize> = None; // Initialize here
     // Throughput tracking
     let mut global_stats = GlobalStats::new(200); // Fixed '2OO' typo
@@ -158,7 +170,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Handle incoming packets
         while let Ok(packet) = rx.try_recv() {
-            if !is_paused {
+            if !app.is_paused {
                 let key = (
                     packet.source.clone(),
                     packet.dest.clone(),
@@ -205,7 +217,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .collect();
 
         // Autoscroll logic
-        if !is_paused && received_new && active_tab == Tab::Feed {
+        if !app.is_paused && received_new && active_tab == Tab::Feed {
             if !filtered_packets.is_empty() {
                 feed_list_state.select(Some(filtered_packets.len() - 1));
             }
@@ -218,13 +230,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let current_rx: Vec<u64> = global_stats.graph.rx_history.iter().cloned().collect();
             let current_tx: Vec<u64> = global_stats.graph.tx_history.iter().cloned().collect();
 
-            let chart_data = if is_paused {
+            let chart_data = if app.is_paused {
                 &frozen_history
             } else {
                 &current_history
             };
-            let rx_data = if is_paused { &frozen_rx } else { &current_rx };
-            let tx_data = if is_paused { &frozen_tx } else { &current_tx };
+            let rx_data = if app.is_paused { &frozen_rx } else { &current_rx };
+            let tx_data = if app.is_paused { &frozen_tx } else { &current_tx };
 
             ui::draw(
                 f,
@@ -234,8 +246,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 chart_data,
                 rx_data,
                 tx_data,
-                &is_paused,
-                &is_saving,
+                &app,
                 &filter_text,
                 &input_mode,
                 &mut feed_list_state,
@@ -245,7 +256,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &global_stats,
             );
         })?;
-
+let available = Theme::list_themes();
         // Input Handling
         if event::poll(Duration::from_millis(10))? {
             if let Event::Key(key) = event::read()? {
@@ -255,9 +266,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Char('1') => active_tab = Tab::Connections,
                         KeyCode::Char('2') => active_tab = Tab::Feed,
                         KeyCode::Char('/') => input_mode = InputMode::Search,
+                        KeyCode::Char('h') => app.show_shortcuts = !app.show_shortcuts,
+                        KeyCode::Char('t') => app.show_theme = !app.show_theme,
+                        KeyCode::Esc => {
+                            if app.show_theme {
+                                app.show_theme = false
+                            }
+                            if app.show_shortcuts {
+                                app.show_shortcuts = false
+                            }
+                        }
+                        
                         KeyCode::Char(' ') => {
-                            is_paused = !is_paused;
-                            if is_paused {
+                            app.is_paused = !app.is_paused;
+                            if app.is_paused {
                                 frozen_history =
                                     global_stats.graph.total_history.iter().cloned().collect();
                                 frozen_rx = global_stats.graph.rx_history.iter().cloned().collect();
@@ -277,7 +299,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let mut guard = save_file.lock().unwrap();
                             if guard.is_some() {
                                 *guard = None;
-                                is_saving = false;
+                                app.is_saving = false;
                             } else {
                                 let ts = Local::now().format("%Y-%m-%d_%H-%M-%S");
                                 let filename = format!("net-sniff_{}.pcap", ts);
@@ -289,12 +311,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 {
                                     if let Ok(file) = tmp_cap.savefile(filename) {
                                         *guard = Some(file);
-                                        is_saving = true;
+                                        app.is_saving = true;
                                     }
                                 }
                             }
                         }
                         KeyCode::Char('j') | KeyCode::Down => {
+                            if app.show_theme {
+                                if !available.is_empty() && app.theme_index < available.len() - 1 {
+                                app.theme_index += 1;
+                                }
+                            }else {    
+                            
                             let state = if active_tab == Tab::Feed {
                                 &mut feed_list_state
                             } else {
@@ -305,8 +333,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 None => 0,
                             };
                             state.select(Some(i));
-                        }
+                        }}
                         KeyCode::Char('k') | KeyCode::Up => {
+                            if app.show_theme {
+                                app.theme_index = app.theme_index.saturating_sub(1);
+                            } else {
                             let state = if active_tab == Tab::Feed {
                                 &mut feed_list_state
                             } else {
@@ -317,6 +348,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 None => 0,
                             };
                             state.select(Some(i));
+                        }}
+                        KeyCode::Enter => {
+                            if app.show_theme {
+                                if let Some(theme_name) = available.get(app.theme_index) {
+                                Theme::apply_theme_file(theme_name);
+                                    }
+                                app.show_theme = false;
+                            }
                         }
                         // In your KeyCode match block:
                         KeyCode::Left => {
