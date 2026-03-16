@@ -39,9 +39,34 @@ pub struct App{
     pub is_saving:bool,
     pub show_shortcuts:bool,
     pub show_theme:bool,
-    pub theme_index:usize
+    pub theme_index:usize,
+    pub search_scope:SearchScope
+}
+#[derive(PartialEq,Default)]
+pub enum SearchScope {
+    #[default]
+    AppName,
+    Summary,
+    Hex,
 }
 
+impl SearchScope {
+    pub fn next(&self) -> Self {
+        match self {
+            SearchScope::AppName => SearchScope::Summary,
+            SearchScope::Summary => SearchScope::Hex,
+            SearchScope::Hex => SearchScope::AppName,
+        }
+    }
+    
+    pub fn label(&self) -> &str {
+        match self {
+            SearchScope::AppName => "APP NAME",
+            SearchScope::Summary => "SUMMARY (IP/PORT)",
+            SearchScope::Hex => "HEX DUMP",
+        }
+    }
+}
 
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -381,6 +406,9 @@ let available = Theme::list_themes();
                         KeyCode::Esc => {
                             filter_text.clear();
                             input_mode = InputMode::Normal
+                        }
+                        KeyCode::Tab => {
+                            app.search_scope = app.search_scope.next()
                         }
                         _ => {}
                     },

@@ -1,6 +1,7 @@
 use crate::capture::{GlobalStats, PacketData};
 use crate::{App, InputMode, Tab};
-use crate::theme::Theme; 
+use crate::theme::Theme;
+use crate::SearchScope;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -88,6 +89,7 @@ pub fn draw(
             throughput_history,
             pause_time,
             global_stats,
+            &app
         ),
     }
 
@@ -103,16 +105,17 @@ pub fn draw(
     } else {
         format!(" {}", filter)
     };
+let filter_title = format!(" 🔍 SEARCHING IN: {} (Tab to cycle) ", app.search_scope.label());
 
-    f.render_widget(
-        Paragraph::new(filter_display).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(filter_style)
-                .title(Span::styled(" 🔍 FILTER ", filter_style)),
-        ),
-        main_chunks[2],
-    );
+f.render_widget(
+    Paragraph::new(filter_display).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(filter_style)
+            .title(Span::styled(filter_title, filter_style)),
+    ),
+    main_chunks[2],
+);
 
     // --- DYNAMIC FOOTER ---
     let mut status_line = vec![
@@ -164,7 +167,7 @@ pub fn draw(
         main_chunks[3],
     );
     if app.show_shortcuts {
-        draw_help_popup(f);
+        draw_help_popup(f,&app.search_scope);
     }
     if app.show_theme{
         draw_theme_popup(f, app.theme_index);
@@ -181,6 +184,7 @@ fn draw_feed_tab(
     history: &[u64],
     pause_time: Option<Instant>,
     global_stats: &GlobalStats,
+    app:&App
 ) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -189,26 +193,44 @@ fn draw_feed_tab(
 
     let filter_low = filter.to_lowercase();
 
-    let filtered: Vec<&PacketData> = packets
-        .iter()
-        .filter(|p| {
-            let matches_text = filter.is_empty() 
-                || p.summary.to_lowercase().contains(&filter_low)
-                || p.app_name.to_lowercase().contains(&filter_low);
-            if !filter.is_empty(){
-                return matches_text;
-            }
-            if let Some(idx) = spike_idx {
-                if let Some(ref_time) = pause_time {
-                    let seconds_before_pause = (history.len().saturating_sub(1 + idx)) as u64;
-                    if p.timestamp > ref_time { return false; }
-                    let packet_age_at_pause = ref_time.duration_since(p.timestamp).as_secs();
-                    return packet_age_at_pause == seconds_before_pause;
-                }
-            }
+let filtered: Vec<&PacketData> = packets
+    .iter()
+    .filter(|p| {
+        let filter_low = filter.to_lowercase();
+        
+        // 1. Check Search Match based on Scope
+        let matches_search = if filter.is_empty() {
             true
-        })
-        .collect();
+        } else {
+            match app.search_scope {
+                SearchScope::AppName => p.app_name.to_lowercase().contains(&filter_low),
+                SearchScope::Summary => p.summary.to_lowercase().contains(&filter_low),
+                SearchScope::Hex => p.hex_dump.to_lowercase().contains(&filter_low),
+            }
+        };
+
+        // If it doesn't match the search text, discard it immediately
+        if !matches_search {
+            return false;
+        }
+
+        // 2. Check Spike/Time Match (only if we aren't searching globally)
+        // Note: If you want search to work *within* a spike, keep this. 
+        // If you want search to be global, you'd skip this when filter is active.
+        if let Some(idx) = spike_idx {
+            if let Some(ref_time) = pause_time {
+                let seconds_before_pause = (history.len().saturating_sub(1 + idx)) as u64;
+                if p.timestamp > ref_time { return false; }
+                let packet_age_at_pause = ref_time.duration_since(p.timestamp).as_secs();
+                
+                // Only return true if it belongs to this specific second of the spike
+                return packet_age_at_pause == seconds_before_pause;
+            }
+        }
+
+        true
+    })
+    .collect();
 
     let items: Vec<ListItem> = filtered
         .iter()
@@ -473,48 +495,49 @@ fn draw_connections_tab(
         );
     }
 }
-pub fn draw_help_popup(f: &mut Frame) {
-    // 70% wide and 60% high is usually the "sweet spot" for text lists
-    let area = centered_rect(70, 60, f.area());
+pub fn draw_help_popup(f: &mut Frame, search_scope: &SearchScope) {
+    let area = centered_rect(70, 70, f.area());
     f.render_widget(Clear, area);
 
-    // Style for the keys (Yellow/Bold) and descriptions (Dim/Italic)
     let key_style = Theme::get("border_focus").add_modifier(Modifier::BOLD);
     let desc_style = Theme::get("dim");
-
+let scope_label = format!("Cycle Scope (Now: {})", search_scope.label());
     let rows = vec![
         // --- NAVIGATION ---
         Row::new(vec![" NAVIGATION", ""]).style(Theme::get("total").add_modifier(Modifier::BOLD)),
         Row::new(vec!["  [1 / 2]", "Switch Tabs (Connections / Feed)"]).style(desc_style),
         Row::new(vec!["  [j / k] or [↑ / ↓]", "Scroll List Items"]).style(desc_style),
-        Row::new(vec!["  [← / →]", "Scrub spikes (When Paused)"]).style(desc_style),
+        Row::new(vec!["  [← / →]", "Scrub spikes (In Inspector Mode)"]).style(desc_style),
         
-        // --- SEARCH & FILTER ---
-        Row::new(vec!["", ""]), // Spacer
-        Row::new(vec![" SEARCH & FILTER", ""]).style(Theme::get("rx").add_modifier(Modifier::BOLD)),
-        Row::new(vec!["  [/]", "Enter Search Mode"]).style(desc_style),
-        Row::new(vec!["  [Enter]", "Confirm / Exit Search"]).style(desc_style),
-        Row::new(vec!["  [ESC]", "Clear Filter & Exit Search"]).style(desc_style),
+        // --- SEARCH MODE ---
+        Row::new(vec!["", ""]), 
+        Row::new(vec![" SEARCH MODE", ""]).style(Theme::get("rx").add_modifier(Modifier::BOLD)),
+        Row::new(vec!["  [/]", "Enter Filter Mode"]).style(desc_style),
+Row::new(vec![
+        "  [Tab]".to_string(), 
+        scope_label 
+    ]).style(key_style),
+        Row::new(vec!["  [Enter / ESC]", "Confirm / Clear and Exit"]).style(desc_style),
 
-        // --- CONTROLS ---
-        Row::new(vec!["", ""]), // Spacer
-        Row::new(vec![" SYSTEM & CAPTURE", ""]).style(Theme::get("tx").add_modifier(Modifier::BOLD)),
+        // --- SYSTEM & RECORDING ---
+        Row::new(vec!["", ""]), 
+        Row::new(vec![" SYSTEM & TOOLS", ""]).style(Theme::get("tx").add_modifier(Modifier::BOLD)),
         Row::new(vec!["  [Space]", "Pause / Resume Live Feed"]).style(desc_style),
-        Row::new(vec!["  [w]", "Toggle PCAP Recording (Auto-Timestamp)"]).style(desc_style),
-        Row::new(vec!["  [c]", "Clear Current Buffer"]).style(desc_style),
-        Row::new(vec!["  [t]", "Toggle Theme Selector"]).style(desc_style),
-        Row::new(vec!["  [h]", "Close this Help Menu"]).style(desc_style),
-        Row::new(vec!["  [q]", "Quit Application"]).style(desc_style),
+        Row::new(vec!["  [w]", "Toggle PCAP Recording"]).style(desc_style),
+        Row::new(vec!["  [t]", "Open Theme Browser"]).style(desc_style),
+        Row::new(vec!["  [c]", "Clear Session History"]).style(desc_style),
+        Row::new(vec!["  [h / ESC]", "Close Help / Popups"]).style(desc_style),
+        Row::new(vec!["  [q]", "Quit Net-Sniff-Rs"]).style(desc_style),
     ];
 
-    let table = Table::new(rows, [Constraint::Length(22), Constraint::Min(20)])
+    let table = Table::new(rows, [Constraint::Length(25), Constraint::Min(20)])
         .block(
             Block::default()
-                .title(" ⌨️ KEYBOARD SHORTCUTS ")
+                .title(" ⌨️ COMMAND PALETTE ")
                 .borders(Borders::ALL)
                 .border_style(Theme::get("border_focus")),
         )
-        .header(Row::new(vec!["  KEY", "ACTION"]).style(key_style).bottom_margin(1));
+        .header(Row::new(vec!["  COMMAND", "FUNCTION"]).style(key_style).bottom_margin(1));
 
     f.render_widget(table, area);
 }
