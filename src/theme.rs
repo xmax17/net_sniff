@@ -3,8 +3,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::sync::{RwLock, Once};
-use notify::{Watcher, RecursiveMode, Config as NotifyConfig};
-use std::path::PathBuf;
+use notify::{Watcher, RecursiveMode};
 #[derive(Deserialize, Clone, Default)]
 struct ThemeConfig {
     colors: HashMap<String, (u8, u8, u8)>,

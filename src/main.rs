@@ -137,7 +137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .open()
             .unwrap();
 
-        let mut last_refresh = Instant::now();
+        let _last_refresh = Instant::now();
 
         while let Ok(packet) = cap.next_packet() {
             // Log to file if active

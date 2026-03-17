@@ -32,7 +32,7 @@ pub fn draw_feed_tab(
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
-    let filter_low = filter.to_lowercase();
+    let _filter_low = filter.to_lowercase();
 
 let filtered: Vec<&PacketData> = packets
     .iter()
@@ -189,7 +189,7 @@ pub fn draw_connections_tab(
     filter: &str,
     list_state: &mut ListState,
     selected_idx: Option<usize>,
-    global_stats: &GlobalStats,
+    _global_stats: &GlobalStats,
 ) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)

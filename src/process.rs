@@ -3,10 +3,8 @@ use std::process::Command;
 use std::str;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use std::{option, thread, time, u16};
+use std::{thread, time};
 
-#[cfg(target_os = "linux")]
-use procfs;
 
 // In sysinfo 0.30+, traits like ProcessExt/SystemExt are gone.
 // We just need the main types.
