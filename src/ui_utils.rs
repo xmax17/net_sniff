@@ -1,7 +1,7 @@
+use crate::theme::Theme;
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
-use ratatui::Frame;
-use crate::theme::Theme;
 
 /// helper function to create a centered rect using up certain % of the screen
 pub fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
