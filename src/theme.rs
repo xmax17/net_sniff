@@ -1,10 +1,9 @@
-use notify::{Config as NotifyConfig, RecursiveMode, Watcher};
 use ratatui::style::{Color, Modifier, Style};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
-use std::sync::{Once, RwLock};
+use std::sync::{RwLock, Once};
+use notify::{Watcher, RecursiveMode};
 #[derive(Deserialize, Clone, Default)]
 struct ThemeConfig {
     colors: HashMap<String, (u8, u8, u8)>,
@@ -18,13 +17,10 @@ static START_WATCHER: Once = Once::new();
 impl Theme {
     fn load_and_apply() {
         let path = "theme.toml";
-
+        
         // Try to read the file; if it fails, use a hardcoded default so the UI doesn't break
         let config = fs::read_to_string(path)
-            .and_then(|content| {
-                toml::from_str::<ThemeConfig>(&content)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
-            })
+            .and_then(|content| toml::from_str::<ThemeConfig>(&content).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
             .unwrap_or_else(|_| {
                 // Fallback default colors if file is missing or broken
                 let mut fallback = HashMap::new();
@@ -47,14 +43,8 @@ impl Theme {
                 let (tx, rx) = std::sync::mpsc::channel();
                 // Use default config for watcher
                 let mut watcher = notify::recommended_watcher(tx).unwrap();
-
-                if watcher
-                    .watch(
-                        std::path::Path::new("theme.toml"),
-                        RecursiveMode::NonRecursive,
-                    )
-                    .is_ok()
-                {
+                
+                if watcher.watch(std::path::Path::new("theme.toml"), RecursiveMode::NonRecursive).is_ok() {
                     for res in rx {
                         match res {
                             Ok(_) => Self::load_and_apply(),
@@ -76,8 +66,7 @@ impl Theme {
         let colors = &guard.as_ref().unwrap().colors;
 
         let to_color = |key: &str| {
-            colors
-                .get(key)
+            colors.get(key)
                 .map(|&(r, g, b)| Color::Rgb(r, g, b))
                 .unwrap_or(Color::Rgb(150, 150, 150)) // Fallback gray
         };
@@ -89,18 +78,11 @@ impl Theme {
             "border_active" => Style::default().fg(to_color("border_active")),
             "border_inactive" => Style::default().fg(to_color("border_inactive")),
             "border_focus" => Style::default().fg(to_color("border_focus")),
-            "highlight" => Style::default()
-                .bg(to_color("highlight_bg"))
-                .fg(to_color("highlight_fg"))
-                .add_modifier(Modifier::BOLD),
+            "highlight" => Style::default().bg(to_color("highlight_bg")).fg(to_color("highlight_fg")).add_modifier(Modifier::BOLD),
             "app_name" => Style::default().fg(to_color("app_name")),
-            "country" => Style::default()
-                .fg(to_color("country"))
-                .add_modifier(Modifier::BOLD),
+            "country" => Style::default().fg(to_color("country")).add_modifier(Modifier::BOLD),
             "payload" => Style::default().fg(to_color("payload")),
-            "dim" => Style::default()
-                .fg(to_color("dim"))
-                .add_modifier(Modifier::ITALIC),
+            "dim" => Style::default().fg(to_color("dim")).add_modifier(Modifier::ITALIC),
             _ => Style::default().fg(to_color("dim")),
         }
     }
@@ -127,14 +109,14 @@ impl Theme {
         themes.sort();
         themes
     }
-    pub fn apply_theme_file(name: &str) {
+pub fn apply_theme_file(name: &str) {
         let source = format!("./themes/{}.toml", name);
         let destination = "theme.toml";
-
+        
         if let Err(e) = std::fs::copy(&source, destination) {
             eprintln!("Error applying theme {}: {}", name, e);
         }
-        // The file watcher we built earlier will see theme.toml change
+        // The file watcher we built earlier will see theme.toml change 
         // and trigger the reload automatically!
     }
 }

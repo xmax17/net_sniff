@@ -1,4 +1,4 @@
-use chrono::{DateTime, Local};
+use chrono::Local;
 use etherparse::{NetSlice, SlicedPacket, TransportSlice};
 use std::{collections::VecDeque, time::Instant};
 

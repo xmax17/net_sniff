@@ -1,10 +1,12 @@
 mod capture;
 mod geo;
 mod process;
-mod theme;
 mod ui;
 mod ui_utils;
-use crate::capture::{GlobalStats, GraphData, PacketData, is_local_ip, parse_packet_full};
+mod ui_tabs;
+mod ui_popup;
+mod theme;
+use crate::capture::{GlobalStats, PacketData, is_local_ip, parse_packet_full};
 use crate::geo::GeoResolver;
 use crate::process::{ProcessResolver, run_ss_updater};
 use crate::theme::Theme;
@@ -34,15 +36,15 @@ pub enum Tab {
 }
 
 #[derive(Default)]
-pub struct App {
-    pub is_paused: bool,
-    pub is_saving: bool,
-    pub show_shortcuts: bool,
-    pub show_theme: bool,
-    pub theme_index: usize,
-    pub search_scope: SearchScope,
+pub struct App{
+    pub is_paused:bool,
+    pub is_saving:bool,
+    pub show_shortcuts:bool,
+    pub show_theme:bool,
+    pub theme_index:usize,
+    pub search_scope:SearchScope
 }
-#[derive(PartialEq, Default)]
+#[derive(PartialEq,Default)]
 pub enum SearchScope {
     #[default]
     AppName,
@@ -58,7 +60,7 @@ impl SearchScope {
             SearchScope::Hex => SearchScope::AppName,
         }
     }
-
+    
     pub fn label(&self) -> &str {
         match self {
             SearchScope::AppName => "APP NAME",
@@ -67,6 +69,7 @@ impl SearchScope {
         }
     }
 }
+
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Device Selection
@@ -134,7 +137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .open()
             .unwrap();
 
-        let mut last_refresh = Instant::now();
+        let _last_refresh = Instant::now();
 
         while let Ok(packet) = cap.next_packet() {
             // Log to file if active
@@ -259,16 +262,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 &current_history
             };
-            let rx_data = if app.is_paused {
-                &frozen_rx
-            } else {
-                &current_rx
-            };
-            let tx_data = if app.is_paused {
-                &frozen_tx
-            } else {
-                &current_tx
-            };
+            let rx_data = if app.is_paused { &frozen_rx } else { &current_rx };
+            let tx_data = if app.is_paused { &frozen_tx } else { &current_tx };
 
             ui::draw(
                 f,
@@ -288,7 +283,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &global_stats,
             );
         })?;
-        let available = Theme::list_themes();
+let available = Theme::list_themes();
         // Input Handling
         if event::poll(Duration::from_millis(10))? {
             if let Event::Key(key) = event::read()? {
@@ -308,7 +303,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 app.show_shortcuts = false
                             }
                         }
-
+                        
                         KeyCode::Char(' ') => {
                             app.is_paused = !app.is_paused;
                             if app.is_paused {
@@ -351,42 +346,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Char('j') | KeyCode::Down => {
                             if app.show_theme {
                                 if !available.is_empty() && app.theme_index < available.len() - 1 {
-                                    app.theme_index += 1;
+                                app.theme_index += 1;
                                 }
+                            }else {    
+                            
+                            let state = if active_tab == Tab::Feed {
+                                &mut feed_list_state
                             } else {
-                                let state = if active_tab == Tab::Feed {
-                                    &mut feed_list_state
-                                } else {
-                                    &mut connections_list_state
-                                };
-                                let i = match state.selected() {
-                                    Some(i) => i + 1,
-                                    None => 0,
-                                };
-                                state.select(Some(i));
-                            }
-                        }
+                                &mut connections_list_state
+                            };
+                            let i = match state.selected() {
+                                Some(i) => i + 1,
+                                None => 0,
+                            };
+                            state.select(Some(i));
+                        }}
                         KeyCode::Char('k') | KeyCode::Up => {
                             if app.show_theme {
                                 app.theme_index = app.theme_index.saturating_sub(1);
                             } else {
-                                let state = if active_tab == Tab::Feed {
-                                    &mut feed_list_state
-                                } else {
-                                    &mut connections_list_state
-                                };
-                                let i = match state.selected() {
-                                    Some(i) => i.saturating_sub(1),
-                                    None => 0,
-                                };
-                                state.select(Some(i));
-                            }
-                        }
+                            let state = if active_tab == Tab::Feed {
+                                &mut feed_list_state
+                            } else {
+                                &mut connections_list_state
+                            };
+                            let i = match state.selected() {
+                                Some(i) => i.saturating_sub(1),
+                                None => 0,
+                            };
+                            state.select(Some(i));
+                        }}
                         KeyCode::Enter => {
                             if app.show_theme {
                                 if let Some(theme_name) = available.get(app.theme_index) {
-                                    Theme::apply_theme_file(theme_name);
-                                }
+                                Theme::apply_theme_file(theme_name);
+                                    }
                                 app.show_theme = false;
                             }
                         }
@@ -415,7 +409,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             filter_text.clear();
                             input_mode = InputMode::Normal
                         }
-                        KeyCode::Tab => app.search_scope = app.search_scope.next(),
+                        KeyCode::Tab => {
+                            app.search_scope = app.search_scope.next()
+                        }
                         _ => {}
                     },
                 }
