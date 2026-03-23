@@ -1,20 +1,16 @@
 use crate::capture::{GlobalStats, PacketData};
-use crate::{App, InputMode, Tab};
 use crate::theme::Theme;
+use crate::ui_popup::{draw_help_popup, draw_theme_popup};
+use crate::ui_tabs::{draw_analytics_tab, draw_connections_tab, draw_feed_tab};
+use crate::{App, InputMode, Tab};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout},
     text::{Line, Span},
-    widgets::{
-        Block, Borders, ListState, Paragraph, Tabs,
-    },
+    widgets::{Block, Borders, ListState, Paragraph, Tabs},
 };
 use std::collections::HashMap;
 use std::time::Instant;
-use crate::ui_popup::{draw_help_popup,draw_theme_popup};
-use crate::ui_tabs::{draw_feed_tab,draw_connections_tab};
-
-
 
 pub fn draw(
     f: &mut Frame,
@@ -24,7 +20,7 @@ pub fn draw(
     throughput_history: &[u64],
     rx_history: &[u64],
     tx_history: &[u64],
-    app:&App,
+    app: &App,
     filter: &str,
     mode: &InputMode,
     feed_list_state: &mut ListState,
@@ -44,7 +40,7 @@ pub fn draw(
         .split(f.area());
 
     // --- TABS ---
-    let titles = vec!["🌐 [1] CONNECTIONS ", " 📡 [2] FEED "];
+    let titles = vec!["🌐 [1] CONNECTIONS ", " 📡 [2] FEED ", "[3] ANALYTICS"];
     f.render_widget(
         Tabs::new(titles)
             .block(
@@ -81,8 +77,9 @@ pub fn draw(
             throughput_history,
             pause_time,
             global_stats,
-            &app
+            &app,
         ),
+        Tab::Analytics => draw_analytics_tab(f, main_chunks[1], &app),
     }
 
     // --- FILTER BOX LOGIC ---
@@ -97,17 +94,20 @@ pub fn draw(
     } else {
         format!(" {}", filter)
     };
-let filter_title = format!(" 🔍 SEARCHING IN: {} (Tab to cycle) ", app.search_scope.label());
+    let filter_title = format!(
+        " 🔍 SEARCHING IN: {} (Tab to cycle) ",
+        app.search_scope.label()
+    );
 
-f.render_widget(
-    Paragraph::new(filter_display).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(filter_style)
-            .title(Span::styled(filter_title, filter_style)),
-    ),
-    main_chunks[2],
-);
+    f.render_widget(
+        Paragraph::new(filter_display).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(filter_style)
+                .title(Span::styled(filter_title, filter_style)),
+        ),
+        main_chunks[2],
+    );
 
     // --- DYNAMIC FOOTER ---
     let mut status_line = vec![
@@ -117,13 +117,16 @@ f.render_widget(
                 Theme::get("status_mode_normal")
             } else {
                 Theme::get("status_mode_search")
-            }
+            },
         ),
         " ".into(),
     ];
 
     if let Some(_idx) = selected_spike_idx {
-        status_line.push(Span::styled(" INSPECTOR MODE ", Theme::get("status_inspector")));
+        status_line.push(Span::styled(
+            " INSPECTOR MODE ",
+            Theme::get("status_inspector"),
+        ));
     } else if app.is_saving {
         status_line.push(Span::styled(" RECORDING ", Theme::get("status_recording")));
     } else {
@@ -148,21 +151,21 @@ f.render_widget(
 
     f.render_widget(
         Paragraph::new(Line::from(status_line)).block(
-            Block::default().borders(Borders::ALL)
+            Block::default()
+                .borders(Borders::ALL)
                 .border_style(Theme::get("border_inactive"))
                 .title_bottom(
-                Line::from(format!(" {} ", hints.join(" | ")))
-                    .centered()
-                    .style(Theme::get("dim")),
-            ),
+                    Line::from(format!(" {} ", hints.join(" | ")))
+                        .centered()
+                        .style(Theme::get("dim")),
+                ),
         ),
         main_chunks[3],
     );
     if app.show_shortcuts {
-        draw_help_popup(f,&app.search_scope);
+        draw_help_popup(f, &app.search_scope);
     }
-    if app.show_theme{
+    if app.show_theme {
         draw_theme_popup(f, app.theme_index);
     }
 }
-

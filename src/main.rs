@@ -1,11 +1,11 @@
 mod capture;
 mod geo;
 mod process;
-mod ui;
-mod ui_utils;
-mod ui_tabs;
-mod ui_popup;
 mod theme;
+mod ui;
+mod ui_popup;
+mod ui_tabs;
+mod ui_utils;
 use crate::capture::{GlobalStats, PacketData, is_local_ip, parse_packet_full};
 use crate::geo::GeoResolver;
 use crate::process::{ProcessResolver, run_ss_updater};
@@ -31,20 +31,22 @@ pub enum InputMode {
 
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum Tab {
-    Feed,
     Connections,
+    Feed,
+    Analytics,
 }
 
 #[derive(Default)]
-pub struct App{
-    pub is_paused:bool,
-    pub is_saving:bool,
-    pub show_shortcuts:bool,
-    pub show_theme:bool,
-    pub theme_index:usize,
-    pub search_scope:SearchScope
+pub struct App {
+    pub is_paused: bool,
+    pub is_saving: bool,
+    pub show_shortcuts: bool,
+    pub show_theme: bool,
+    pub theme_index: usize,
+    pub search_scope: SearchScope,
+    pub proto_count: HashMap<String, u64>,
 }
-#[derive(PartialEq,Default)]
+#[derive(PartialEq, Default)]
 pub enum SearchScope {
     #[default]
     AppName,
@@ -60,7 +62,7 @@ impl SearchScope {
             SearchScope::Hex => SearchScope::AppName,
         }
     }
-    
+
     pub fn label(&self) -> &str {
         match self {
             SearchScope::AppName => "APP NAME",
@@ -69,7 +71,6 @@ impl SearchScope {
         }
     }
 }
-
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Device Selection
@@ -205,6 +206,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     packet.app_name.clone(),
                     packet.country_code.clone(),
                 );
+                let proto_label = packet
+                    .proto_label
+                    .clone()
+                    .split(':')
+                    .next()
+                    .unwrap_or(&packet.proto_label)
+                    .to_string();
+                *app.proto_count.entry(proto_label).or_insert(0) += 1 as u64;
                 *connections.entry(key).or_insert(0) += packet.length as u64;
                 if !is_local_ip(&packet.source) {
                     rx_bytes_current_second += packet.length as u64;
@@ -262,8 +271,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 &current_history
             };
-            let rx_data = if app.is_paused { &frozen_rx } else { &current_rx };
-            let tx_data = if app.is_paused { &frozen_tx } else { &current_tx };
+            let rx_data = if app.is_paused {
+                &frozen_rx
+            } else {
+                &current_rx
+            };
+            let tx_data = if app.is_paused {
+                &frozen_tx
+            } else {
+                &current_tx
+            };
 
             ui::draw(
                 f,
@@ -283,7 +300,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &global_stats,
             );
         })?;
-let available = Theme::list_themes();
+        let available = Theme::list_themes();
         // Input Handling
         if event::poll(Duration::from_millis(10))? {
             if let Event::Key(key) = event::read()? {
@@ -292,6 +309,7 @@ let available = Theme::list_themes();
                         KeyCode::Char('q') => break,
                         KeyCode::Char('1') => active_tab = Tab::Connections,
                         KeyCode::Char('2') => active_tab = Tab::Feed,
+                        KeyCode::Char('3') => active_tab = Tab::Analytics,
                         KeyCode::Char('/') => input_mode = InputMode::Search,
                         KeyCode::Char('h') => app.show_shortcuts = !app.show_shortcuts,
                         KeyCode::Char('t') => app.show_theme = !app.show_theme,
@@ -303,7 +321,7 @@ let available = Theme::list_themes();
                                 app.show_shortcuts = false
                             }
                         }
-                        
+
                         KeyCode::Char(' ') => {
                             app.is_paused = !app.is_paused;
                             if app.is_paused {
@@ -346,41 +364,42 @@ let available = Theme::list_themes();
                         KeyCode::Char('j') | KeyCode::Down => {
                             if app.show_theme {
                                 if !available.is_empty() && app.theme_index < available.len() - 1 {
-                                app.theme_index += 1;
+                                    app.theme_index += 1;
                                 }
-                            }else {    
-                            
-                            let state = if active_tab == Tab::Feed {
-                                &mut feed_list_state
                             } else {
-                                &mut connections_list_state
-                            };
-                            let i = match state.selected() {
-                                Some(i) => i + 1,
-                                None => 0,
-                            };
-                            state.select(Some(i));
-                        }}
+                                let state = if active_tab == Tab::Feed {
+                                    &mut feed_list_state
+                                } else {
+                                    &mut connections_list_state
+                                };
+                                let i = match state.selected() {
+                                    Some(i) => i + 1,
+                                    None => 0,
+                                };
+                                state.select(Some(i));
+                            }
+                        }
                         KeyCode::Char('k') | KeyCode::Up => {
                             if app.show_theme {
                                 app.theme_index = app.theme_index.saturating_sub(1);
                             } else {
-                            let state = if active_tab == Tab::Feed {
-                                &mut feed_list_state
-                            } else {
-                                &mut connections_list_state
-                            };
-                            let i = match state.selected() {
-                                Some(i) => i.saturating_sub(1),
-                                None => 0,
-                            };
-                            state.select(Some(i));
-                        }}
+                                let state = if active_tab == Tab::Feed {
+                                    &mut feed_list_state
+                                } else {
+                                    &mut connections_list_state
+                                };
+                                let i = match state.selected() {
+                                    Some(i) => i.saturating_sub(1),
+                                    None => 0,
+                                };
+                                state.select(Some(i));
+                            }
+                        }
                         KeyCode::Enter => {
                             if app.show_theme {
                                 if let Some(theme_name) = available.get(app.theme_index) {
-                                Theme::apply_theme_file(theme_name);
-                                    }
+                                    Theme::apply_theme_file(theme_name);
+                                }
                                 app.show_theme = false;
                             }
                         }
@@ -409,9 +428,7 @@ let available = Theme::list_themes();
                             filter_text.clear();
                             input_mode = InputMode::Normal
                         }
-                        KeyCode::Tab => {
-                            app.search_scope = app.search_scope.next()
-                        }
+                        KeyCode::Tab => app.search_scope = app.search_scope.next(),
                         _ => {}
                     },
                 }

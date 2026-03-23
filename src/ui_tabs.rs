@@ -1,19 +1,20 @@
-use crate::capture::{GlobalStats, PacketData};
 use crate::App;
-use crate::theme::Theme;
 use crate::SearchScope;
+use crate::capture::{GlobalStats, PacketData};
+use crate::theme::Theme;
+use crate::ui_utils::format_bytes;
+use ratatui::style::{Color, Stylize};
+use ratatui::widgets::{Bar, BarChart, BarGroup};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::Modifier,
     text::{Line, Span},
-    widgets::{
-        Block, Borders, List, ListItem, ListState, Paragraph, Sparkline, Wrap
-    },
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Sparkline, Wrap},
 };
 use std::collections::HashMap;
+use std::slice::Chunks;
 use std::time::Instant;
-use crate::ui_utils::format_bytes;
 
 pub fn draw_feed_tab(
     f: &mut Frame,
@@ -25,7 +26,7 @@ pub fn draw_feed_tab(
     history: &[u64],
     pause_time: Option<Instant>,
     global_stats: &GlobalStats,
-    app:&App
+    app: &App,
 ) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -34,44 +35,46 @@ pub fn draw_feed_tab(
 
     let _filter_low = filter.to_lowercase();
 
-let filtered: Vec<&PacketData> = packets
-    .iter()
-    .filter(|p| {
-        let filter_low = filter.to_lowercase();
-        
-        // 1. Check Search Match based on Scope
-        let matches_search = if filter.is_empty() {
+    let filtered: Vec<&PacketData> = packets
+        .iter()
+        .filter(|p| {
+            let filter_low = filter.to_lowercase();
+
+            // 1. Check Search Match based on Scope
+            let matches_search = if filter.is_empty() {
+                true
+            } else {
+                match app.search_scope {
+                    SearchScope::AppName => p.app_name.to_lowercase().contains(&filter_low),
+                    SearchScope::Summary => p.summary.to_lowercase().contains(&filter_low),
+                    SearchScope::Hex => p.hex_dump.to_lowercase().contains(&filter_low),
+                }
+            };
+
+            // If it doesn't match the search text, discard it immediately
+            if !matches_search {
+                return false;
+            }
+
+            // 2. Check Spike/Time Match (only if we aren't searching globally)
+            // Note: If you want search to work *within* a spike, keep this.
+            // If you want search to be global, you'd skip this when filter is active.
+            if let Some(idx) = spike_idx {
+                if let Some(ref_time) = pause_time {
+                    let seconds_before_pause = (history.len().saturating_sub(1 + idx)) as u64;
+                    if p.timestamp > ref_time {
+                        return false;
+                    }
+                    let packet_age_at_pause = ref_time.duration_since(p.timestamp).as_secs();
+
+                    // Only return true if it belongs to this specific second of the spike
+                    return packet_age_at_pause == seconds_before_pause;
+                }
+            }
+
             true
-        } else {
-            match app.search_scope {
-                SearchScope::AppName => p.app_name.to_lowercase().contains(&filter_low),
-                SearchScope::Summary => p.summary.to_lowercase().contains(&filter_low),
-                SearchScope::Hex => p.hex_dump.to_lowercase().contains(&filter_low),
-            }
-        };
-
-        // If it doesn't match the search text, discard it immediately
-        if !matches_search {
-            return false;
-        }
-
-        // 2. Check Spike/Time Match (only if we aren't searching globally)
-        // Note: If you want search to work *within* a spike, keep this. 
-        // If you want search to be global, you'd skip this when filter is active.
-        if let Some(idx) = spike_idx {
-            if let Some(ref_time) = pause_time {
-                let seconds_before_pause = (history.len().saturating_sub(1 + idx)) as u64;
-                if p.timestamp > ref_time { return false; }
-                let packet_age_at_pause = ref_time.duration_since(p.timestamp).as_secs();
-                
-                // Only return true if it belongs to this specific second of the spike
-                return packet_age_at_pause == seconds_before_pause;
-            }
-        }
-
-        true
-    })
-    .collect();
+        })
+        .collect();
 
     let items: Vec<ListItem> = filtered
         .iter()
@@ -211,7 +214,11 @@ pub fn draw_connections_tab(
         Sparkline::default()
             .block(
                 Block::default()
-                    .title(format!(" 📊 TOTAL (Peak: {}) ", format_bytes(total_max)))
+                    .title(format!(
+                        " 📊 TOTAL (Peak: {}, Total: {} ) ",
+                        format_bytes(total_max),
+                        format_bytes(_global_stats.total_tx + _global_stats.total_rx)
+                    ))
                     .borders(Borders::ALL)
                     .border_style(Theme::get("total")),
             )
@@ -227,7 +234,11 @@ pub fn draw_connections_tab(
         Sparkline::default()
             .block(
                 Block::default()
-                    .title(format!(" ▼ RX ({}) ", format_bytes(rx_max)))
+                    .title(format!(
+                        " ▼ RX (Peak: {}, Total: {}) ",
+                        format_bytes(rx_max),
+                        format_bytes(_global_stats.total_rx)
+                    ))
                     .borders(Borders::ALL)
                     .border_style(Theme::get("rx")),
             )
@@ -243,7 +254,11 @@ pub fn draw_connections_tab(
         Sparkline::default()
             .block(
                 Block::default()
-                    .title(format!(" ▲ TX ({}) ", format_bytes(tx_max)))
+                    .title(format!(
+                        " ▲ TX (Peak: {}, Total: {}) ",
+                        format_bytes(tx_max),
+                        format_bytes(_global_stats.total_tx)
+                    ))
                     .borders(Borders::ALL)
                     .border_style(Theme::get("tx")),
             )
@@ -276,10 +291,7 @@ pub fn draw_connections_tab(
         .map(|(key, bytes)| {
             let (_src, _dst, proto, app, country) = key;
             ListItem::new(Line::from(vec![
-                Span::styled(
-                    format!("{:<10} | {}", app, country),
-                    Theme::get("app_name"),
-                ),
+                Span::styled(format!("{:<10} | {}", app, country), Theme::get("app_name")),
                 format!(" │ {} │ ", proto).into(),
                 Span::styled(format_bytes(**bytes), Theme::get("total")),
             ]))
@@ -304,7 +316,12 @@ pub fn draw_connections_tab(
             let (src, dst, proto, app, country) = key;
             let info = format!(
                 "Application: {}\nCountry code: {}\nProtocol:    {}\nSource:      {}\nDestination: {}\nTotal Data:  {}",
-                app, country, proto, src, dst, format_bytes(**bytes),
+                app,
+                country,
+                proto,
+                src,
+                dst,
+                format_bytes(**bytes),
             );
             f.render_widget(
                 Paragraph::new(info)
@@ -335,4 +352,43 @@ pub fn draw_connections_tab(
             bottom_chunks[1],
         );
     }
+}
+pub fn draw_analytics_tab(f: &mut Frame, area: Rect, app: &App) {
+    if app.proto_count.is_empty() {
+        let loading = Paragraph::new("📡 Waiting for packets to analyze...")
+            .style(Theme::get("dim"))
+            .alignment(ratatui::layout::Alignment::Center);
+        f.render_widget(loading, area);
+        return;
+    }
+
+    let chunks = Layout::default()
+        .constraints([Constraint::Min(0)])
+        .split(area);
+
+    let mut stat_vec: Vec<(&String, &u64)> = app.proto_count.iter().collect();
+    stat_vec.sort_by(|a, b| b.1.cmp(a.1));
+
+    let bars: Vec<Bar> = stat_vec
+        .iter()
+        .map(|(name, count)| {
+            Bar::default()
+                .label(name.as_str())
+                .value(**count)
+                .style(Theme::get("rx"))
+                .value_style(Theme::get("highlight_fg"))
+                .bg(Theme::get("highlight_bg").bg.unwrap_or(Color::Reset))
+        })
+        .collect();
+
+    let chart_title = format!(" 📊 Protocol Distribution (Total: {}) ", stat_vec.len());
+
+    let barchart = BarChart::default()
+        .block(Block::default().title(chart_title).borders(Borders::ALL))
+        .data(BarGroup::default().bars(&bars))
+        .bar_width(3)
+        .bar_gap(1)
+        .group_gap(3)
+        .direction(Direction::Horizontal);
+    f.render_widget(barchart, chunks[0]);
 }
